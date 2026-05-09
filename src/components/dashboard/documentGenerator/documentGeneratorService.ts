@@ -208,7 +208,6 @@ const HEADER_H = 70;     // reserved height for header image
 const FOOTER_H = 50;     // reserved height for footer image
 const BODY_TOP = PAGE_H - MARGIN - HEADER_H;
 const BODY_BOT = MARGIN + FOOTER_H;
-const BODY_H   = BODY_TOP - BODY_BOT;
 
 // ─── Stamp header & footer onto a PDF page ─────────────────────────────────────
 
