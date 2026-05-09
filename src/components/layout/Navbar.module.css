@@ -1,0 +1,42 @@
+.header {
+  position:fixed; top:0; left:0; right:0; z-index:100;
+  background:rgba(255,255,255,0.92);
+  backdrop-filter:blur(20px) saturate(180%);
+  border-bottom:1px solid var(--c-border);
+}
+.nav {
+  max-width:1200px; margin:0 auto; padding:0 32px;
+  height:64px; display:flex; align-items:center; gap:8px;
+}
+.logo { display:flex; align-items:center; gap:10px; text-decoration:none; flex-shrink:0; margin-right:16px; }
+.logoMark {
+  width:34px; height:34px; border-radius:9px;
+  background:linear-gradient(135deg,var(--c-purple-2),var(--c-purple));
+  display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  box-shadow:0 4px 12px rgba(124,58,237,0.35);
+}
+.logoMark svg { width:18px; height:18px; }
+.logoName { font-size:17px; font-weight:800; color:var(--c-text); letter-spacing:-0.03em; }
+.logoDot { color:var(--c-border-2); margin:0 2px; font-size:13px; }
+.logoSub { font-size:12px; color:var(--c-text-3); font-weight:400; }
+
+.links { display:flex; align-items:center; gap:2px; list-style:none; margin:0 auto; }
+.link {
+  padding:7px 14px; font-size:14px; color:var(--c-text-2);
+  border-radius:var(--r-md); transition:all var(--t); font-weight:500;
+}
+.link:hover { color:var(--c-purple-2); background:var(--c-purple-light); }
+
+.actions { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+.burger { display:none; flex-direction:column; gap:5px; padding:6px; margin-left:auto; cursor:pointer; }
+.burger span { display:block; width:20px; height:1.5px; background:var(--c-text-2); border-radius:2px; transition:all var(--t); }
+.burgerOpen span:nth-child(1) { transform:rotate(45deg) translate(4.5px,4.5px); }
+.burgerOpen span:nth-child(2) { opacity:0; }
+.burgerOpen span:nth-child(3) { transform:rotate(-45deg) translate(4.5px,-4.5px); }
+
+.mobileMenu { display:flex; flex-direction:column; padding:12px 24px 24px; border-top:1px solid var(--c-border); background:#fff; }
+.mobileLink { padding:13px 0; font-size:15px; color:var(--c-text-2); border-bottom:1px solid var(--c-border); font-weight:500; }
+.mobileLink:hover { color:var(--c-purple-2); }
+.mobileCtas { display:flex; flex-direction:column; gap:10px; margin-top:20px; }
+
+@media(max-width:768px) { .links,.actions{display:none;} .burger{display:flex;} }

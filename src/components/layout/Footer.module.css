@@ -1,0 +1,34 @@
+.footer { background:var(--c-text); }
+.inner { max-width:1200px; margin:0 auto; padding:64px 32px; display:grid; grid-template-columns:1.6fr 1fr; gap:80px; }
+.logo { display:flex; align-items:center; gap:10px; margin-bottom:16px; }
+.logoMark {
+  width:30px; height:30px; border-radius:8px;
+  background:linear-gradient(135deg,var(--c-purple-2),var(--c-purple));
+  display:flex; align-items:center; justify-content:center;
+}
+.logoMark svg { width:16px; height:16px; }
+.logoName { font-size:16px; font-weight:800; color:#fff; letter-spacing:-0.02em; }
+.logoDot { color:rgba(255,255,255,0.2); margin:0 4px; }
+.logoSub { font-size:12px; color:rgba(255,255,255,0.4); }
+.tagline { font-size:14px; color:rgba(255,255,255,0.5); line-height:1.7; max-width:300px; margin-bottom:24px; }
+.socialRow { display:flex; gap:8px; }
+.socialBtn {
+  padding:7px 16px; font-size:12.5px; font-weight:500; color:rgba(255,255,255,0.6);
+  border:1px solid rgba(255,255,255,0.12); border-radius:var(--r-full);
+  transition:all var(--t); font-family:var(--font-sans); cursor:pointer; background:none;
+}
+.socialBtn:hover { color:#fff; border-color:rgba(255,255,255,0.3); }
+
+.cols { display:grid; grid-template-columns:repeat(3,1fr); gap:32px; }
+.col h4 { font-size:11.5px; font-weight:700; color:rgba(255,255,255,0.5); text-transform:uppercase; letter-spacing:0.09em; margin-bottom:18px; }
+.col ul { list-style:none; display:flex; flex-direction:column; gap:12px; }
+.col a { font-size:13.5px; color:rgba(255,255,255,0.55); transition:color var(--t); font-weight:400; }
+.col a:hover { color:#fff; }
+.bottom {
+  max-width:1200px; margin:0 auto; padding:20px 32px;
+  border-top:1px solid rgba(255,255,255,0.08);
+  display:flex; justify-content:space-between; align-items:center;
+  font-size:12.5px; color:rgba(255,255,255,0.35);
+}
+@media(max-width:900px) { .inner{grid-template-columns:1fr;gap:40px;} .cols{grid-template-columns:repeat(2,1fr);} }
+@media(max-width:500px) { .cols{grid-template-columns:1fr;} .bottom{flex-direction:column;gap:8px;text-align:center;} }

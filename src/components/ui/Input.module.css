@@ -1,0 +1,20 @@
+.wrapper { display:flex; flex-direction:column; gap:6px; }
+.label { font-size:12.5px; font-weight:600; color:var(--c-text-2); }
+.inputWrap { position:relative; }
+.icon {
+  position:absolute; left:12px; top:50%; transform:translateY(-50%);
+  color:var(--c-text-3); display:flex; align-items:center; pointer-events:none;
+}
+.input {
+  width:100%; background:#fff; border:1.5px solid var(--c-border);
+  border-radius:var(--r-md); padding:10px 14px; color:var(--c-text);
+  font-size:14px; transition:border-color var(--t),box-shadow var(--t);
+  outline:none; font-family:var(--font-sans); font-weight:400;
+  box-shadow:var(--shadow-sm);
+}
+.input::placeholder { color:var(--c-text-3); }
+.input:focus { border-color:var(--c-purple-2); box-shadow:0 0 0 3px rgba(124,58,237,0.1); }
+.hasIcon { padding-left:38px; }
+.hasError { border-color:var(--c-red); }
+.hasError:focus { box-shadow:0 0 0 3px rgba(220,38,38,0.1); }
+.error { font-size:12px; color:var(--c-red); }

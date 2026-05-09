@@ -1,0 +1,82 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Lora:ital,wght@0,400;0,600;1,400;1,600&display=swap');
+
+:root {
+  /* Core palette — white + deep purple */
+  --c-bg:         #FFFFFF;
+  --c-bg-2:       #F7F6FF;
+  --c-bg-3:       #EEEAFF;
+  --c-surface:    #FFFFFF;
+  --c-surface-2:  #F4F2FF;
+  --c-border:     #E5E2F0;
+  --c-border-2:   #D0CAF0;
+
+  --c-text:       #0F0A1E;
+  --c-text-2:     #4A4468;
+  --c-text-3:     #8B85A8;
+
+  --c-purple:     #5B21B6;
+  --c-purple-2:   #7C3AED;
+  --c-purple-3:   #A78BFA;
+  --c-purple-light: #EDE9FE;
+  --c-purple-glow:  rgba(124,58,237,0.12);
+
+  --c-green:      #059669;
+  --c-amber:      #D97706;
+  --c-red:        #DC2626;
+
+  --font-sans:    'Plus Jakarta Sans', -apple-system, sans-serif;
+  --font-serif:   'Lora', Georgia, serif;
+
+  --r-sm:   6px;
+  --r-md:   10px;
+  --r-lg:   16px;
+  --r-xl:   24px;
+  --r-2xl:  36px;
+  --r-full: 9999px;
+
+  --t:      220ms cubic-bezier(0.4,0,0.2,1);
+  --t-slow: 420ms cubic-bezier(0.4,0,0.2,1);
+
+  --shadow-sm:  0 1px 3px rgba(91,33,182,0.08), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md:  0 4px 16px rgba(91,33,182,0.1), 0 2px 6px rgba(0,0,0,0.06);
+  --shadow-lg:  0 12px 40px rgba(91,33,182,0.14), 0 4px 12px rgba(0,0,0,0.08);
+  --shadow-xl:  0 24px 64px rgba(91,33,182,0.18), 0 8px 24px rgba(0,0,0,0.1);
+}
+
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+html { scroll-behavior:smooth; }
+body {
+  font-family: var(--font-sans);
+  background: var(--c-bg);
+  color: var(--c-text);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+  font-size: 15px;
+}
+a { color:inherit; text-decoration:none; }
+button { font-family:var(--font-sans); cursor:pointer; border:none; background:none; }
+input,select,textarea { font-family:var(--font-sans); }
+
+::-webkit-scrollbar { width:5px; }
+::-webkit-scrollbar-track { background:#F7F6FF; }
+::-webkit-scrollbar-thumb { background:#D0CAF0; border-radius:99px; }
+
+@keyframes fadeUp {
+  from { opacity:0; transform:translateY(24px); }
+  to   { opacity:1; transform:translateY(0); }
+}
+@keyframes fadeIn { from{opacity:0;} to{opacity:1;} }
+@keyframes float {
+  0%,100% { transform:translateY(0); }
+  50%      { transform:translateY(-10px); }
+}
+@keyframes spin { to{transform:rotate(360deg);} }
+@keyframes pulse {
+  0%,100% { opacity:1; }
+  50%      { opacity:0.45; }
+}
+@keyframes shimmer {
+  0%   { transform:translateX(-100%); }
+  100% { transform:translateX(100%); }
+}
