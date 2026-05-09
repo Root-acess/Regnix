@@ -1,508 +1,568 @@
 import { useState, useRef, useCallback, DragEvent, ChangeEvent } from 'react';
 import styles from './DocumentGenerator.module.css';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-type StepId = 'header' | 'master' | 'footer' | 'generate';
-
-interface UploadSlot {
-  file: File | null;
-  preview: string | null; // for images
-}
-
-interface Uploads {
-  header: UploadSlot;
-  master: UploadSlot;
-  footer: UploadSlot;
-}
-
-interface ProcessingLog {
-  text: string;
-  done: boolean;
-}
-
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const STEPS: { id: StepId; icon: string; label: string; sub: string }[] = [
-  { id: 'header',   icon: '▤',  label: 'Company Header', sub: 'Upload your letterhead / logo image' },
-  { id: 'master',   icon: '⊞',  label: 'Master Data',    sub: 'Upload filled Regnix master file (.xlsx)' },
-  { id: 'footer',   icon: '▤',  label: 'Company Footer', sub: 'Upload your footer / signature image' },
-  { id: 'generate', icon: '⚡', label: 'Generate',       sub: 'Review & generate all compliance forms' },
+const AUTO_FORMS = [
+  { code: 'III',   rule: '18(3)',         name: 'Register of Registration',                   cols: '0–10'   },
+  { code: 'XII',   rule: '74',            name: 'Register of Contractors',                    cols: '11–30'  },
+  { code: 'XIII',  rule: '75',            name: 'Register of Workmen by Contractor',          cols: '31–42'  },
+  { code: 'XIV',   rule: '76',            name: 'Employment Card',                            cols: '43–48'  },
+  { code: 'XV',    rule: '77',            name: 'Service Certificate',                        cols: '49–53'  },
+  { code: 'XVI',   rule: '78(1)(a)(i)',   name: 'Muster Roll',                               cols: '54–86'  },
+  { code: 'XVII',  rule: '78(1)(a)(i)',   name: 'Register of Wages',                         cols: '87–99'  },
+  { code: 'XIX',   rule: '78(1)(b)',      name: 'Wage Slip',                                 cols: '87–99'  },
+  { code: 'XX',    rule: '78(1)(a)(i)',   name: 'Register of Deductions for Damage or Loss', cols: '100–108'},
+  { code: 'XXI',   rule: '78(1)(a)(ii)',  name: 'Register of Fines',                         cols: '109–112'},
+  { code: 'XXII',  rule: '78(1)(a)(ii)',  name: 'Register of Advances',                      cols: '113–119'},
+  { code: 'XXIII', rule: '78(1)(a)(iii)', name: 'Register of Overtime',                      cols: '120–154'},
+  { code: 'V',     rule: '21(2)',         name: 'Certificate by Principal Employer',          cols: '2–30'   },
+  { code: 'V-A',   rule: '24(1-A)',       name: 'Application for Adjustment of Security Deposit', cols: '15–17'},
+  { code: 'VI-A',  rule: '25(2)(viii)',   name: 'Notice of Commencement/Completion – Clerical', cols: '2–29' },
+  { code: 'VI-B',  rule: '81(3)',         name: 'Notice of Commencement/Completion – Contract', cols: '2–29' },
+  { code: 'VIII',  rule: '32(2)',         name: 'Temporary Registration of Establishment',   cols: '0–10'   },
 ];
 
-const FORMS_GENERATED = [
-  'Form XIII – Register of Workmen',
-  'Form XIV – Employment Card',
-  'Form XV – Service Certificate',
-  'Form XVI – Muster Roll',
-  'Form XVII – Register of Wages',
-  'Form XVIII – Wage Slip',
-  'Form XIX – Register of Deductions',
-  'Form XX – Register of Fines',
-  'Form XXI – Register of Advances',
-  'Form XXII – Register of Overtime',
-  'Form XXIII – Overtime Wages',
+const MANUAL_FORMS = [
+  { code: 'IV',    rule: '21(1)',  name: 'Application for Licence' },
+  { code: 'VI',    rule: '25(1)',  name: 'Licence — Office of Licensing Officer' },
+  { code: 'VII',   rule: '29(2)',  name: 'Application for Renewal of Licence' },
+  { code: 'X',     rule: '32(2)',  name: 'Application for Temporary Licence' },
+  { code: 'XI',    rule: '32(3)',  name: 'Temporary Licence — Licensing Officer' },
+  { code: 'XXIV',  rule: '82(1)',  name: 'Return by Contractor to Licensing Officer' },
+  { code: 'XXV',   rule: '82(2)',  name: 'Annual Return of Principal Employer' },
 ];
 
-const PROCESSING_LOGS: string[] = [
-  'Parsing master data file…',
-  'Validating 155 column fields…',
-  'Reading company header image…',
-  'Reading company footer image…',
-  'Mapping workmen data to Form XIII…',
-  'Generating employment cards (Form XIV)…',
-  'Building service certificates (Form XV)…',
-  'Compiling muster roll (Form XVI)…',
-  'Populating wage registers (Form XVII–XIX)…',
-  'Processing deductions & overtime data…',
-  'Applying PF / ESIC / PT calculations…',
-  'Composing PDF layouts with header & footer…',
-  'Finalising all ' + FORMS_GENERATED.length + ' compliance forms…',
-  'Packaging into downloadable ZIP…',
-  'Done ✓',
+const COL_GROUPS = [
+  { label: 'Registration',         range: '0 – 10',   color: '#6366f1' },
+  { label: 'Contractors',          range: '11 – 30',  color: '#0ea5e9' },
+  { label: 'Workmen Details',      range: '31 – 53',  color: '#10b981' },
+  { label: 'Muster / Attendance',  range: '54 – 86',  color: '#f59e0b' },
+  { label: 'Wages & Deductions',   range: '87 – 126', color: '#f43f5e' },
+  { label: 'Salary Components',    range: '127 – 154',color: '#8b5cf6' },
 ];
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+const PROCESS_LOG = [
+  'Parsing master Excel file…',
+  'Validating 155 column schema…',
+  'Reading workmen records…',
+  'Building Form III – Register of Registration…',
+  'Building Form XII – Register of Contractors…',
+  'Building Form XIII – Workmen Register…',
+  'Building Form XIV – Employment Cards…',
+  'Building Form XV – Service Certificates…',
+  'Building Form XVI – Muster Rolls…',
+  'Building Form XVII – Register of Wages…',
+  'Building Form XIX – Wage Slips…',
+  'Building Form XX – Deductions Register…',
+  'Building Form XXI – Fines Register…',
+  'Building Form XXII – Advances Register…',
+  'Building Form XXIII – Overtime Register…',
+  'Stamping company header on all pages…',
+  'Stamping company footer & signatory block…',
+  `Compressing ${AUTO_FORMS.length} PDFs into ZIP…`,
+  'Complete ✓',
+];
 
-function FileDropZone({
-  accept, label, hint, icon, slot, onFile, onClear
-}: {
-  accept: string; label: string; hint: string; icon: string;
-  slot: UploadSlot; onFile: (f: File) => void; onClear: () => void;
+interface Slot { file: File | null; preview: string | null; }
+
+// ─── DropZone ─────────────────────────────────────────────────────────────────
+
+function DropZone({ slot, accept, icon, label, hint, accent, onFile, onClear }: {
+  slot: Slot; accept: string; icon: string; label: string;
+  hint: string; accent: string; onFile(f: File): void; onClear(): void;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [dragging, setDragging] = useState(false);
+  const inp = useRef<HTMLInputElement>(null);
+  const [over, setOver] = useState(false);
 
-  const handleDrop = useCallback((e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault(); setDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (file) onFile(file);
+  const drop = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault(); setOver(false);
+    const f = e.dataTransfer.files[0]; if (f) onFile(f);
   }, [onFile]);
 
-  const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) onFile(file);
-    e.target.value = '';
-  };
-
-  if (slot.file) {
-    return (
-      <div className={styles.uploadedSlot}>
-        {slot.preview
-          ? <img src={slot.preview} alt="preview" className={styles.imgPreview} />
-          : <div className={styles.fileChip}>
-              <span className={styles.fileChipIcon}>📄</span>
-              <div>
-                <div className={styles.fileChipName}>{slot.file.name}</div>
-                <div className={styles.fileChipSize}>{(slot.file.size / 1024).toFixed(1)} KB</div>
-              </div>
+  if (slot.file) return (
+    <div className={styles.slotFilled} style={{ '--accent': accent } as React.CSSProperties}>
+      {slot.preview
+        ? <img src={slot.preview} alt="" className={styles.slotImg} />
+        : <div className={styles.slotFile}>
+            <span className={styles.slotFileIco}>{icon}</span>
+            <div>
+              <div className={styles.slotFileName}>{slot.file.name}</div>
+              <div className={styles.slotFileSz}>{(slot.file.size / 1024).toFixed(1)} KB</div>
             </div>
-        }
-        <button className={styles.clearBtn} onClick={onClear}>✕ Remove</button>
-      </div>
-    );
-  }
+            <div className={styles.slotTick}>✓</div>
+          </div>
+      }
+      <button className={styles.slotReplace} onClick={onClear}>↺ Replace file</button>
+    </div>
+  );
 
   return (
     <div
-      className={`${styles.dropZone} ${dragging ? styles.dropZoneOver : ''}`}
-      onClick={() => inputRef.current?.click()}
-      onDragOver={e => { e.preventDefault(); setDragging(true); }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={handleDrop}
+      className={`${styles.dz} ${over ? styles.dzHot : ''}`}
+      style={{ '--accent': accent } as React.CSSProperties}
+      onClick={() => inp.current?.click()}
+      onDragOver={e => { e.preventDefault(); setOver(true); }}
+      onDragLeave={() => setOver(false)}
+      onDrop={drop}
     >
-      <input ref={inputRef} type="file" accept={accept} onChange={handleChange} hidden />
-      <div className={styles.dropIcon}>{icon}</div>
-      <div className={styles.dropLabel}>{label}</div>
-      <div className={styles.dropHint}>{hint}</div>
-      <div className={styles.dropCTA}>Click or drag & drop</div>
+      <input ref={inp} type="file" accept={accept} hidden
+        onChange={(e: ChangeEvent<HTMLInputElement>) => {
+          const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = '';
+        }} />
+      <div className={styles.dzGlow} />
+      <div className={styles.dzIcon}>{icon}</div>
+      <div className={styles.dzLabel}>{label}</div>
+      <div className={styles.dzHint}>{hint}</div>
+      <div className={styles.dzCta}>Click to browse · or drag &amp; drop</div>
     </div>
   );
 }
 
-// ─── Main Component ───────────────────────────────────────────────────────────
+// ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function DocumentGenerator() {
-  const [activeStep, setActiveStep] = useState<StepId>('header');
-  const [uploads, setUploads] = useState<Uploads>({
-    header: { file: null, preview: null },
-    master: { file: null, preview: null },
-    footer: { file: null, preview: null },
-  });
-  const [processing, setProcessing] = useState(false);
-  const [logs, setLogs] = useState<ProcessingLog[]>([]);
-  const [done, setDone] = useState(false);
-  const [zipBlob, setZipBlob] = useState<Blob | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [header,     setH] = useState<Slot>({ file: null, preview: null });
+  const [master,     setM] = useState<Slot>({ file: null, preview: null });
+  const [footer,     setF] = useState<Slot>({ file: null, preview: null });
+  const [phase,   setPhase] = useState<'idle'|'processing'|'done'|'error'>('idle');
+  const [logs,     setLogs] = useState<{ txt: string; ok: boolean }[]>([]);
+  const [errMsg,  setErrMsg] = useState('');
+  const [zipBlob, setZip]   = useState<Blob|null>(null);
+  const logEl = useRef<HTMLDivElement>(null);
 
-  const setFile = (key: keyof Uploads, file: File) => {
-    const isImage = file.type.startsWith('image/');
-    const preview = isImage ? URL.createObjectURL(file) : null;
-    setUploads(prev => ({ ...prev, [key]: { file, preview } }));
+  const mkSlot = (key: 'h'|'m'|'f', file: File) => {
+    const preview = file.type.startsWith('image/') ? URL.createObjectURL(file) : null;
+    if (key==='h') setH({ file, preview });
+    if (key==='m') setM({ file, preview });
+    if (key==='f') setF({ file, preview });
+  };
+  const clrSlot = (key: 'h'|'m'|'f') => {
+    const clr = (s: Slot) => { if (s.preview) URL.revokeObjectURL(s.preview); };
+    if (key==='h') { clr(header); setH({ file:null, preview:null }); }
+    if (key==='m') { clr(master); setM({ file:null, preview:null }); }
+    if (key==='f') { clr(footer); setF({ file:null, preview:null }); }
   };
 
-  const clearFile = (key: keyof Uploads) => {
-    setUploads(prev => {
-      if (prev[key].preview) URL.revokeObjectURL(prev[key].preview!);
-      return { ...prev, [key]: { file: null, preview: null } };
-    });
-  };
+  const ready = !!header.file && !!master.file && !!footer.file;
+  const count = [header,master,footer].filter(s=>s.file).length;
 
-  const canGenerate =
-    uploads.header.file !== null &&
-    uploads.master.file !== null &&
-    uploads.footer.file !== null;
+  const generate = async () => {
+    if (!ready) return;
+    setPhase('processing'); setLogs([]); setErrMsg('');
+    const ctrl = new AbortController();
 
-  // Animate log lines while the real API request is in-flight
-  const animateLogs = async (signal: AbortSignal) => {
-    for (let i = 0; i < PROCESSING_LOGS.length - 1; i++) {
-      if (signal.aborted) return;
-      await new Promise(r => setTimeout(r, 550 + Math.random() * 400));
-      setLogs(prev => [
-        ...prev.map(l => ({ ...l, done: true })),
-        { text: PROCESSING_LOGS[i], done: false },
-      ]);
-    }
-  };
-
-  const startProcessing = async () => {
-    if (!uploads.header.file || !uploads.master.file || !uploads.footer.file) return;
-    setProcessing(true);
-    setDone(false);
-    setLogs([]);
-    setError(null);
-    setActiveStep('generate');
-
-    const abortCtrl = new AbortController();
-
-    // kick off log animation in parallel with the real request
-    animateLogs(abortCtrl.signal);
+    // Animate logs while real API runs
+    (async () => {
+      for (let i = 0; i < PROCESS_LOG.length - 1; i++) {
+        if (ctrl.signal.aborted) return;
+        await new Promise(r => setTimeout(r, 520 + Math.random() * 300));
+        setLogs(p => [...p.map(l=>({...l, ok:true})), { txt: PROCESS_LOG[i], ok: false }]);
+        if (logEl.current) logEl.current.scrollTop = logEl.current.scrollHeight;
+      }
+    })();
 
     try {
-      const body = new FormData();
-      body.append('header', uploads.header.file);
-      body.append('master', uploads.master.file);
-      body.append('footer', uploads.footer.file);
-
-      const res = await fetch('/api/generate-docs', {
-        method: 'POST',
-        body,
-        signal: abortCtrl.signal,
-      });
-
-      if (!res.ok) {
-        const msg = await res.json().then(d => d.error).catch(() => 'Server error');
-        throw new Error(msg);
-      }
-
-      // Save ZIP blob for the download button
+      const fd = new FormData();
+      fd.append('header', header.file!);
+      fd.append('master', master.file!);
+      fd.append('footer', footer.file!);
+      const res = await fetch('/api/generate-docs', { method:'POST', body:fd, signal:ctrl.signal });
+      if (!res.ok) throw new Error(await res.json().then((d:{error?:string})=>d.error||'Server error').catch(()=>'Server error'));
       const blob = await res.blob();
-      setZipBlob(blob);
-
-      abortCtrl.abort(); // stop log animation
-      // Final "Done" line
-      setLogs(prev => [
-        ...prev.map(l => ({ ...l, done: true })),
-        { text: PROCESSING_LOGS[PROCESSING_LOGS.length - 1], done: false },
-      ]);
-      await new Promise(r => setTimeout(r, 500));
-      setDone(true);
-
-    } catch (err: unknown) {
-      abortCtrl.abort();
-      if (err instanceof Error && err.name !== 'AbortError') {
-        setError(err.message);
+      setZip(blob);
+      ctrl.abort();
+      setLogs(p => [...p.map(l=>({...l,ok:true})), { txt: PROCESS_LOG[PROCESS_LOG.length-1], ok:false }]);
+      await new Promise(r=>setTimeout(r,700));
+      setPhase('done');
+    } catch(e:unknown) {
+      ctrl.abort();
+      if (e instanceof Error && e.name!=='AbortError') {
+        setErrMsg(e.message); setPhase('error');
       }
-      setProcessing(false);
     }
+  };
+
+  const download = () => {
+    if (!zipBlob) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(zipBlob);
+    a.download = `Regnix_CLRA_Forms_${new Date().toISOString().slice(0,10)}.zip`;
+    a.click();
   };
 
   const reset = () => {
-    clearFile('header'); clearFile('master'); clearFile('footer');
-    setProcessing(false); setLogs([]); setDone(false);
-    setZipBlob(null); setError(null);
-    setActiveStep('header');
+    clrSlot('h'); clrSlot('m'); clrSlot('f');
+    setPhase('idle'); setLogs([]); setErrMsg(''); setZip(null);
   };
 
-  const handleDownloadZip = () => {
-    if (!zipBlob) return;
-    const url = URL.createObjectURL(zipBlob);
-    const a = document.createElement('a');
-    a.href = url;
-    const date = new Date().toISOString().slice(0,10).replace(/-/g,'');
-    a.download = `Regnix_ComplianceForms_${date}.zip`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const completedSteps = (Object.keys(uploads) as (keyof Uploads)[]).filter(k => uploads[k].file);
+  const pct = logs.filter(l=>l.ok).length / PROCESS_LOG.length * 100;
 
   return (
     <div className={styles.page}>
 
-      {/* ── Page Title ─────────────────────────────── */}
-      <div className={styles.pageHead}>
-        <div className={styles.pageHeadLeft}>
-          <div className={styles.pageBreadcrumb}>
-            <span>Compliance</span><span className={styles.sep}>›</span><span className={styles.active}>Document Generator</span>
+      {/* ── Top bar ─────────────────────────────────────────────────── */}
+      <div className={styles.topBar}>
+        <div className={styles.topLeft}>
+          <div className={styles.crumb}>
+            <span>Compliance</span><span className={styles.crumbSep}>›</span>
+            <span className={styles.crumbNow}>Document Generator</span>
           </div>
-          <h1 className={styles.pageTitle}>Compliance Form Generator</h1>
-          <p className={styles.pageSub}>Upload your master data and branding assets — we generate all statutory forms as PDFs with your header & footer applied.</p>
+          <h1 className={styles.h1}>CLRA Form Generator</h1>
+          <p className={styles.sub}>
+            Upload your filled master Excel + company branding — instantly generate all&nbsp;
+            <strong>{AUTO_FORMS.length} statutory PDFs</strong> under the Contract Labour (R&amp;A) Act, 1970.
+          </p>
         </div>
-        <div className={styles.statusBadge}>
-          <span className={styles.statusDot} />
-          {completedSteps.length}/3 assets ready
+
+        {/* Progress ring */}
+        <div className={styles.ring}>
+          <svg viewBox="0 0 72 72" className={styles.ringSvg}>
+            <circle cx="36" cy="36" r="30" fill="none" stroke="#e5e7eb" strokeWidth="5"/>
+            <circle cx="36" cy="36" r="30" fill="none" stroke="url(#rg)" strokeWidth="5"
+              strokeDasharray={`${count/3*188.5} 188.5`} strokeLinecap="round"
+              transform="rotate(-90 36 36)"
+              style={{transition:'stroke-dasharray .5s ease'}}/>
+            <defs>
+              <linearGradient id="rg" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#6366f1"/>
+                <stop offset="100%" stopColor="#8b5cf6"/>
+              </linearGradient>
+            </defs>
+          </svg>
+          <div className={styles.ringInner}>
+            <span className={styles.ringNum}>{count}</span>
+            <span className={styles.ringOf}>/3</span>
+          </div>
+          <div className={styles.ringLabel}>assets ready</div>
         </div>
       </div>
 
-      {/* ── Workflow Steps ─────────────────────────── */}
-      <div className={styles.stepsRow}>
-        {STEPS.map((s, i) => {
-          const isUpload = s.id !== 'generate';
-          const filled = isUpload && uploads[s.id as keyof Uploads].file !== null;
-          const isActive = activeStep === s.id;
-          const isDone = (done && s.id === 'generate') || filled;
-          return (
-            <button
-              key={s.id}
-              className={`${styles.stepBtn} ${isActive ? styles.stepActive : ''} ${isDone ? styles.stepDone : ''}`}
-              onClick={() => setActiveStep(s.id)}
-            >
-              <div className={styles.stepBadge}>
-                {isDone ? '✓' : <span>{s.icon}</span>}
-              </div>
-              <div className={styles.stepText}>
-                <div className={styles.stepLabel}>{s.label}</div>
-                <div className={styles.stepSub}>{s.sub}</div>
-              </div>
-              {i < STEPS.length - 1 && <div className={styles.stepLine} />}
-            </button>
-          );
-        })}
+      {/* ── Workflow track ─────────────────────────────────────────── */}
+      <div className={styles.track}>
+        {[
+          { n:'1', t:'Download',  s:'Get master template',            done: true },
+          { n:'2', t:'Fill Data', s:'Complete all 155 columns',       done: !!master.file },
+          { n:'3', t:'Upload',    s:'Header · Excel · Footer',        done: ready },
+          { n:'4', t:'Generate',  s:`${AUTO_FORMS.length} PDFs auto-built`, done: phase==='done' },
+        ].map((step, i, arr) => (
+          <div className={styles.trackItem} key={step.n}>
+            <div className={`${styles.trackBall} ${step.done?styles.trackDone:''}`}>
+              {step.done ? '✓' : step.n}
+            </div>
+            <div className={styles.trackText}>
+              <div className={styles.trackTitle}>{step.t}</div>
+              <div className={styles.trackSub}>{step.s}</div>
+            </div>
+            {i < arr.length-1 && (
+              <div className={`${styles.trackLine} ${step.done?styles.trackLineFull:''}`}/>
+            )}
+          </div>
+        ))}
       </div>
 
-      {/* ── Download Manual ────────────────────────── */}
-      <div className={styles.downloadBanner}>
-        <div className={styles.downloadBannerLeft}>
-          <span className={styles.dlIcon}>📥</span>
-          <div>
-            <strong>Step 0 — Download the Master Template</strong>
-            <p>Fill in all employee, contractor, and wage details in the Regnix master Excel file before uploading it below.</p>
+      {/* ── Two-col layout ─────────────────────────────────────────── */}
+      <div className={styles.layout}>
+
+        {/* ═══ LEFT column ═══════════════════════════════════════════ */}
+        <div className={styles.left}>
+
+          {/* 01 Download */}
+          <div className={styles.card}>
+            <div className={styles.cardHd}>
+              <div className={styles.stepBadge} style={{background:'#6366f1'}}>01</div>
+              <div>
+                <div className={styles.cardTitle}>Download Master Template</div>
+                <div className={styles.cardSub}>Fill every column before uploading — do not rename or reorder</div>
+              </div>
+            </div>
+
+            <div className={styles.dlBox}>
+              <div className={styles.dlBoxLeft}>
+                <div className={styles.dlEmoji}>📊</div>
+                <div>
+                  <div className={styles.dlName}>Regnix_Master_Template.xlsx</div>
+                  <div className={styles.dlMeta}>155 columns · Covers all 17 auto-generated forms</div>
+                </div>
+              </div>
+              <a href="/Regnix.xlsx" download className={styles.dlBtn}>
+                <span>⬇</span> Download
+              </a>
+            </div>
+
+            <div className={styles.colMap}>
+              {COL_GROUPS.map(g => (
+                <div key={g.label} className={styles.colMapItem}>
+                  <span className={styles.colDot} style={{background:g.color}}/>
+                  <span className={styles.colRange}>{g.range}</span>
+                  <span className={styles.colLabel}>{g.label}</span>
+                </div>
+              ))}
+            </div>
           </div>
+
+          {/* 02 Header upload */}
+          <div className={`${styles.card} ${header.file?styles.cardOk:''}`}>
+            <div className={styles.cardHd}>
+              <div className={styles.stepBadge} style={{background: header.file?'#10b981':'#6366f1'}}>
+                {header.file?'✓':'02'}
+              </div>
+              <div>
+                <div className={styles.cardTitle}>Company Header</div>
+                <div className={styles.cardSub}>Letterhead / logo — printed at top of every PDF page</div>
+              </div>
+            </div>
+            <DropZone
+              slot={header} accept="image/png,image/jpeg,image/jpg,image/svg+xml"
+              icon="🖼" label="Upload header image"
+              hint="PNG · JPG · SVG  ·  Ideal: 2480 × 200 px, transparent bg"
+              accent="#6366f1"
+              onFile={f=>mkSlot('h',f)} onClear={()=>clrSlot('h')}
+            />
+          </div>
+
+          {/* 03 Master file upload */}
+          <div className={`${styles.card} ${master.file?styles.cardOk:''}`}>
+            <div className={styles.cardHd}>
+              <div className={styles.stepBadge} style={{background: master.file?'#10b981':'#6366f1'}}>
+                {master.file?'✓':'03'}
+              </div>
+              <div>
+                <div className={styles.cardTitle}>Master Data File</div>
+                <div className={styles.cardSub}>Filled Regnix .xlsx — column order must be preserved exactly</div>
+              </div>
+            </div>
+            <DropZone
+              slot={master} accept=".xlsx,.xls"
+              icon="📊" label="Upload filled Excel"
+              hint=".xlsx only  ·  Must contain all 155 columns from the template"
+              accent="#10b981"
+              onFile={f=>mkSlot('m',f)} onClear={()=>clrSlot('m')}
+            />
+          </div>
+
+          {/* 04 Footer upload */}
+          <div className={`${styles.card} ${footer.file?styles.cardOk:''}`}>
+            <div className={styles.cardHd}>
+              <div className={styles.stepBadge} style={{background: footer.file?'#10b981':'#6366f1'}}>
+                {footer.file?'✓':'04'}
+              </div>
+              <div>
+                <div className={styles.cardTitle}>Company Footer</div>
+                <div className={styles.cardSub}>Authorised signatory block — printed at bottom of every page</div>
+              </div>
+            </div>
+            <DropZone
+              slot={footer} accept="image/png,image/jpeg,image/jpg"
+              icon="🖋" label="Upload footer image"
+              hint="PNG · JPG  ·  Ideal: 2480 × 150 px, includes signature block"
+              accent="#f59e0b"
+              onFile={f=>mkSlot('f',f)} onClear={()=>clrSlot('f')}
+            />
+          </div>
+
         </div>
-        <a href="/Regnix.xlsx" download className={styles.downloadBtn}>
-          <span>⬇</span> Download Master File (.xlsx)
-        </a>
-      </div>
 
-      {/* ── Main Panel ─────────────────────────────── */}
-      <div className={styles.mainPanel}>
+        {/* ═══ RIGHT column ══════════════════════════════════════════ */}
+        <div className={styles.right}>
 
-        {/* ── LEFT: Upload Panels ─────────────────── */}
-        <div className={styles.uploadsCol}>
-
-          {/* HEADER */}
-          <div className={`${styles.uploadCard} ${activeStep === 'header' ? styles.uploadCardActive : ''}`}
-               onClick={() => setActiveStep('header')}>
-            <div className={styles.uploadCardHead}>
-              <div className={styles.uploadCardIcon} style={{ background: 'rgba(124,58,237,0.1)', color: '#7C3AED' }}>▤</div>
+          {/* Document mock */}
+          <div className={styles.card}>
+            <div className={styles.cardHd}>
+              <div className={styles.stepBadge} style={{background:'#8b5cf6'}}>◉</div>
               <div>
-                <div className={styles.uploadCardTitle}>Company Header</div>
-                <div className={styles.uploadCardSub}>Logo + letterhead strip (PNG / JPG / SVG)</div>
+                <div className={styles.cardTitle}>Live Preview</div>
+                <div className={styles.cardSub}>Your branded form layout</div>
               </div>
-              {uploads.header.file && <span className={styles.checkMark}>✓</span>}
             </div>
-            <FileDropZone
-              accept="image/*"
-              label="Header image"
-              hint="Recommended: 2480 × 200 px, transparent PNG"
-              icon="🖼"
-              slot={uploads.header}
-              onFile={f => setFile('header', f)}
-              onClear={() => clearFile('header')}
-            />
-          </div>
 
-          {/* MASTER FILE */}
-          <div className={`${styles.uploadCard} ${activeStep === 'master' ? styles.uploadCardActive : ''}`}
-               onClick={() => setActiveStep('master')}>
-            <div className={styles.uploadCardHead}>
-              <div className={styles.uploadCardIcon} style={{ background: 'rgba(5,150,105,0.1)', color: '#059669' }}>⊞</div>
-              <div>
-                <div className={styles.uploadCardTitle}>Master Data File</div>
-                <div className={styles.uploadCardSub}>Filled Regnix .xlsx with all employee & wage data</div>
-              </div>
-              {uploads.master.file && <span className={styles.checkMark}>✓</span>}
-            </div>
-            <FileDropZone
-              accept=".xlsx,.xls"
-              label="Master Excel file"
-              hint="Must be the official Regnix template — do not rename columns"
-              icon="📊"
-              slot={uploads.master}
-              onFile={f => setFile('master', f)}
-              onClear={() => clearFile('master')}
-            />
-          </div>
-
-          {/* FOOTER */}
-          <div className={`${styles.uploadCard} ${activeStep === 'footer' ? styles.uploadCardActive : ''}`}
-               onClick={() => setActiveStep('footer')}>
-            <div className={styles.uploadCardHead}>
-              <div className={styles.uploadCardIcon} style={{ background: 'rgba(217,119,6,0.1)', color: '#D97706' }}>▤</div>
-              <div>
-                <div className={styles.uploadCardTitle}>Company Footer</div>
-                <div className={styles.uploadCardSub}>Authorized signature strip / footer image (PNG / JPG)</div>
-              </div>
-              {uploads.footer.file && <span className={styles.checkMark}>✓</span>}
-            </div>
-            <FileDropZone
-              accept="image/*"
-              label="Footer image"
-              hint="Recommended: 2480 × 150 px, includes signatory block"
-              icon="🖼"
-              slot={uploads.footer}
-              onFile={f => setFile('footer', f)}
-              onClear={() => clearFile('footer')}
-            />
-          </div>
-
-        </div>
-
-        {/* ── RIGHT: Preview + Generate ───────────── */}
-        <div className={styles.previewCol}>
-
-          {/* Document Preview Mock */}
-          <div className={styles.docPreview}>
-            <div className={styles.docPreviewLabel}>Document Preview</div>
-
-            <div className={styles.docMock}>
-              {/* Header area */}
-              <div className={`${styles.docMockHeader} ${uploads.header.file ? styles.docMockFilled : ''}`}>
-                {uploads.header.preview
-                  ? <img src={uploads.header.preview} alt="header" className={styles.docMockImg} />
-                  : <div className={styles.docMockPlaceholder}>
-                      <span className={styles.docMockPlaceholderIcon}>▤</span>
-                      <span>Company Header</span>
-                    </div>
+            <div className={styles.mock}>
+              <div className={`${styles.mockHdr} ${header.file?styles.mockZoneFull:''}`}>
+                {header.preview
+                  ? <img src={header.preview} alt="" className={styles.mockZoneImg}/>
+                  : <div className={styles.mockZonePh}><span>▤</span> Company Header</div>
                 }
               </div>
 
-              {/* Body area */}
-              <div className={styles.docMockBody}>
-                {uploads.master.file ? (
-                  <div className={styles.docMockData}>
-                    <div className={styles.docMockDataTitle}>✓ Master file ready</div>
-                    <div className={styles.docMockDataSub}>{uploads.master.file.name}</div>
-                    <div className={styles.docMockLines}>
-                      {[90, 75, 85, 60, 80, 70, 55, 88].map((w, i) => (
-                        <div key={i} className={styles.docMockLine} style={{ width: `${w}%` }} />
+              <div className={styles.mockBody}>
+                {master.file ? (
+                  <div className={styles.mockContent}>
+                    <div className={styles.mockFormTitle}>FORM XIII — Register of Workmen Employed by Contractor</div>
+                    <div className={styles.mockFormSub}>[See rule 75] · Contract Labour (R&amp;A) Act, 1970</div>
+                    <div className={styles.mockLines}>
+                      {[90,68,82,55,76,88,61,74].map((w,i) => (
+                        <div key={i} className={styles.mockLine} style={{width:`${w}%`, animationDelay:`${i*80}ms`}}/>
                       ))}
                     </div>
-                    <div className={styles.docMockFormList}>
-                      {FORMS_GENERATED.slice(0, 5).map((f, i) => (
-                        <div key={i} className={styles.docMockFormItem}>
-                          <span className={styles.docMockFormDot} />
-                          {f}
-                        </div>
+                    <div className={styles.mockGrid}>
+                      {['Sl.No','Name','Designation','Wage Rate','Date Joined'].map(h=>(
+                        <div key={h} className={styles.mockGridCell}>{h}</div>
                       ))}
-                      <div className={styles.docMockFormMore}>+ {FORMS_GENERATED.length - 5} more forms</div>
+                    </div>
+                    <div className={styles.mockDataRow}>
+                      {['01','As per data','As per data','As per data','As per data'].map((v,i)=>(
+                        <div key={i} className={styles.mockGridCell} style={{opacity:0.45}}>{v}</div>
+                      ))}
                     </div>
                   </div>
                 ) : (
-                  <div className={styles.docMockBodyPlaceholder}>
-                    <span className={styles.docMockBodyIcon}>⊞</span>
-                    <span>Upload master file to preview</span>
+                  <div className={styles.mockEmpty}>
+                    <div className={styles.mockEmptyIco}>📄</div>
+                    <div>Upload master file to preview</div>
                   </div>
                 )}
               </div>
 
-              {/* Footer area */}
-              <div className={`${styles.docMockFooter} ${uploads.footer.file ? styles.docMockFilled : ''}`}>
-                {uploads.footer.preview
-                  ? <img src={uploads.footer.preview} alt="footer" className={styles.docMockImg} />
-                  : <div className={styles.docMockPlaceholder}>
-                      <span className={styles.docMockPlaceholderIcon}>▤</span>
-                      <span>Company Footer / Signature</span>
-                    </div>
+              <div className={`${styles.mockFtr} ${footer.file?styles.mockZoneFull:''}`}>
+                {footer.preview
+                  ? <img src={footer.preview} alt="" className={styles.mockZoneImg}/>
+                  : <div className={styles.mockZonePh}><span>▤</span> Company Footer / Signature</div>
                 }
               </div>
             </div>
           </div>
 
-          {/* Forms list */}
-          <div className={styles.formsList}>
-            <div className={styles.formsListTitle}>Forms to be generated ({FORMS_GENERATED.length})</div>
-            {FORMS_GENERATED.map((f, i) => (
-              <div key={i} className={styles.formsListItem}>
-                <span className={styles.formsListNum}>{String(i + 1).padStart(2, '0')}</span>
-                <span className={styles.formsListName}>{f}</span>
-                <span className={styles.formsListBadge}>PDF</span>
+          {/* Forms catalogue */}
+          <div className={styles.card}>
+            <div className={styles.cardHd}>
+              <div className={styles.stepBadge} style={{background:'#0ea5e9'}}>⚖</div>
+              <div>
+                <div className={styles.cardTitle}>All CLRA Statutory Forms</div>
+                <div className={styles.cardSub}>{AUTO_FORMS.length} auto-generated · {MANUAL_FORMS.length} manual reference</div>
               </div>
-            ))}
+            </div>
+
+            <div className={styles.fSect}>
+              <div className={styles.fSectHd}>
+                <span className={styles.fSectDot} style={{background:'#10b981'}}/>
+                Auto-generated from your master Excel
+                <span className={styles.fSectCount}>{AUTO_FORMS.length}</span>
+              </div>
+              <div className={styles.fList}>
+                {AUTO_FORMS.map(f => (
+                  <div key={f.code} className={styles.fRow}>
+                    <div className={styles.fRowLeft}>
+                      <span className={styles.fCode}>Form {f.code}</span>
+                      <span className={styles.fName}>{f.name}</span>
+                    </div>
+                    <div className={styles.fRowRight}>
+                      <span className={styles.fRule}>Rule {f.rule}</span>
+                      <span className={styles.fTag} style={{color:'#10b981',background:'rgba(16,185,129,.08)',borderColor:'rgba(16,185,129,.25)'}}>PDF</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className={styles.fSect} style={{marginTop:12}}>
+              <div className={styles.fSectHd}>
+                <span className={styles.fSectDot} style={{background:'#f59e0b'}}/>
+                Manual reference templates (fill by hand)
+                <span className={styles.fSectCount}>{MANUAL_FORMS.length}</span>
+              </div>
+              <div className={styles.fList}>
+                {MANUAL_FORMS.map(f => (
+                  <div key={f.code} className={`${styles.fRow} ${styles.fRowManual}`}>
+                    <div className={styles.fRowLeft}>
+                      <span className={styles.fCode}>Form {f.code}</span>
+                      <span className={styles.fName}>{f.name}</span>
+                    </div>
+                    <div className={styles.fRowRight}>
+                      <span className={styles.fRule}>Rule {f.rule}</span>
+                      <span className={styles.fTag} style={{color:'#f59e0b',background:'rgba(245,158,11,.08)',borderColor:'rgba(245,158,11,.25)'}}>DOC</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
 
-          {/* Error State */}
-          {error && (
-            <div className={styles.errorBox}>
-              <span className={styles.errorIcon}>⚠</span>
-              <div>
-                <div className={styles.errorTitle}>Generation failed</div>
-                <div className={styles.errorMsg}>{error}</div>
-              </div>
-              <button className={styles.errorRetry} onClick={reset}>Try again</button>
+          {/* ── CTA / Processing / Done / Error ──────────────────── */}
+
+          {phase === 'idle' && (
+            <div className={styles.ctaCard}>
+              {!ready && (
+                <div className={styles.checklist}>
+                  <div className={styles.checklistTitle}>Complete these steps to generate</div>
+                  <div className={`${styles.checkItem} ${header.file?styles.checkDone:''}`}>
+                    <span className={styles.checkBullet}>{header.file?'✓':'○'}</span>
+                    Upload company header image
+                  </div>
+                  <div className={`${styles.checkItem} ${master.file?styles.checkDone:''}`}>
+                    <span className={styles.checkBullet}>{master.file?'✓':'○'}</span>
+                    Upload filled master Excel file
+                  </div>
+                  <div className={`${styles.checkItem} ${footer.file?styles.checkDone:''}`}>
+                    <span className={styles.checkBullet}>{footer.file?'✓':'○'}</span>
+                    Upload company footer image
+                  </div>
+                </div>
+              )}
+              <button className={`${styles.genBtn} ${!ready?styles.genOff:''}`} disabled={!ready} onClick={generate}>
+                <span className={styles.genIco}>⚡</span>
+                Generate All {AUTO_FORMS.length} Compliance Forms
+              </button>
+              {ready && <div className={styles.genNote}>All {AUTO_FORMS.length} forms will be generated and packaged into a single ZIP</div>}
             </div>
           )}
 
-          {/* Generate Button */}
-          {!processing && !done && !error && (
-            <button
-              className={`${styles.generateBtn} ${!canGenerate ? styles.generateBtnDisabled : ''}`}
-              disabled={!canGenerate}
-              onClick={startProcessing}
-            >
-              {canGenerate ? '⚡ Generate All Forms' : `⚠ Upload all 3 files to proceed (${completedSteps.length}/3 ready)`}
-            </button>
+          {phase === 'error' && (
+            <div className={styles.errCard}>
+              <div className={styles.errTop}>
+                <span className={styles.errIco}>⚠</span>
+                <div>
+                  <div className={styles.errTitle}>Generation failed</div>
+                  <div className={styles.errMsg}>{errMsg}</div>
+                </div>
+              </div>
+              <button className={styles.errRetry} onClick={()=>{ setPhase('idle'); setErrMsg(''); }}>↺ Try again</button>
+            </div>
           )}
 
-          {/* Processing State */}
-          {processing && !done && (
-            <div className={styles.processingBox}>
-              <div className={styles.processingHeader}>
-                <div className={styles.spinner} />
-                <span>Processing your documents…</span>
+          {phase === 'processing' && (
+            <div className={styles.procCard}>
+              <div className={styles.procTop}>
+                <div className={styles.procSpinner}/>
+                <div>
+                  <div className={styles.procTitle}>Generating your compliance forms…</div>
+                  <div className={styles.procSub}>Please wait · do not close this page</div>
+                </div>
+                <div className={styles.procPct}>{Math.round(pct)}%</div>
               </div>
-              <div className={styles.logBox}>
-                {logs.map((log, i) => (
-                  <div key={i} className={`${styles.logLine} ${log.done ? styles.logDone : styles.logActive}`}>
-                    <span className={styles.logDot}>{log.done ? '✓' : '›'}</span>
-                    {log.text}
+              <div className={styles.procBar}><div className={styles.procFill} style={{width:`${pct}%`}}/></div>
+              <div className={styles.logScroll} ref={logEl}>
+                {logs.map((l,i) => (
+                  <div key={i} className={`${styles.logRow} ${l.ok?styles.logOk:styles.logCur}`}>
+                    <span className={styles.logIco}>{l.ok?'✓':'›'}</span>
+                    {l.txt}
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {/* Done State */}
-          {done && (
-            <div className={styles.doneBox}>
-              <div className={styles.doneCheck}>✓</div>
-              <div className={styles.doneTitle}>All {FORMS_GENERATED.length} forms generated!</div>
-              <div className={styles.doneSub}>Your compliance documents are ready with company header and footer applied.</div>
-              <div className={styles.doneActions}>
-                <button className={styles.downloadAllBtn} onClick={handleDownloadZip}>
-                  <span>⬇</span> Download All as ZIP
-                </button>
-                <button className={styles.startOverBtn} onClick={reset}>
-                  Start over
-                </button>
+          {phase === 'done' && (
+            <div className={styles.doneCard}>
+              <div className={styles.doneTop}>
+                <div className={styles.doneTick}>✓</div>
+                <div>
+                  <div className={styles.doneTitle}>{AUTO_FORMS.length} forms generated successfully</div>
+                  <div className={styles.doneSub}>Header &amp; footer applied · Ready to download</div>
+                </div>
               </div>
-              <div className={styles.doneFormGrid}>
-                {FORMS_GENERATED.map((f, i) => (
-                  <div key={i} className={styles.doneFormItem}>
-                    <span className={styles.doneFormIcon}>📄</span>
-                    <span className={styles.doneFormName}>{f.split('–')[0].trim()}</span>
-                    <button className={styles.doneFormDl}>↓</button>
+              <div className={styles.doneActions}>
+                <button className={styles.doneZip} onClick={download}>⬇ Download ZIP Archive</button>
+                <button className={styles.doneNew} onClick={reset}>↺ New Batch</button>
+              </div>
+              <div className={styles.doneGrid}>
+                {AUTO_FORMS.map(f => (
+                  <div key={f.code} className={styles.doneItem}>
+                    <span className={styles.doneIco}>📄</span>
+                    <div className={styles.doneInfo}>
+                      <span className={styles.doneCode}>Form {f.code}</span>
+                      <span className={styles.doneName}>{f.name}</span>
+                    </div>
+                    <button className={styles.doneDl} title="Download">↓</button>
                   </div>
                 ))}
               </div>

@@ -122,7 +122,7 @@ export default function DashboardPage() {
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(false);
-  const [activeView, setActiveView] = useState('dashboard');
+  const [activeView, setActiveView] = useState('generator');
 
   useEffect(() => { if (!isAuthenticated) navigate('/login'); }, [isAuthenticated, navigate]);
   if (!isAuthenticated) return null;

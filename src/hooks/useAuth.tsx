@@ -1,65 +1,131 @@
-import { createContext, useContext, useState, useCallback, ReactNode } from 'react';
-import type { User, AccountType, SignupFormData } from '@/types';
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+
+export type AccountType = 'company' | 'client';
+
+export interface AuthUser {
+  name: string;
+  email: string;
+  accountType?: AccountType;
+  companyName?: string;
+  industry?: string;
+  gstin?: string;
+  createdAt?: string;
+}
+
+interface SignupFormData {
+  accountType: AccountType;
+  name: string;
+  email: string;
+  password: string;
+  confirmPassword: string;
+  companyName?: string;
+  industry?: string;
+  gstin?: string;
+}
 
 interface AuthContextValue {
-  user: User | null;
+  user: AuthUser | null;
   isAuthenticated: boolean;
-  login: (email: string, _password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
   signup: (data: SignupFormData) => Promise<void>;
   logout: () => void;
 }
 
-const AuthContext = createContext<AuthContextValue | null>(null);
+const AUTH_KEY = 'regnix_auth';
+
+const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+
+function readStoredAuth(): AuthUser | null {
+  try {
+    const raw = localStorage.getItem(AUTH_KEY);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+    return parsed?.user ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredAuth(user: AuthUser) {
+  localStorage.setItem(
+    AUTH_KEY,
+    JSON.stringify({
+      user,
+      token: 'test-token',
+    })
+  );
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(() => {
-    const stored = localStorage.getItem('regnix_user');
-    return stored ? JSON.parse(stored) : null;
-  });
+  const [user, setUser] = useState<AuthUser | null>(() => readStoredAuth());
 
-  const login = useCallback(async (email: string, _password: string) => {
-    // TODO: replace with real API call
-    await new Promise(r => setTimeout(r, 800));
-    const mockUser: User = {
-      id: crypto.randomUUID(),
-      email,
-      name: email.split('@')[0],
-      accountType: 'company',
-      createdAt: new Date().toISOString(),
+  useEffect(() => {
+    const onStorage = () => {
+      setUser(readStoredAuth());
     };
-    localStorage.setItem('regnix_user', JSON.stringify(mockUser));
-    setUser(mockUser);
+
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
   }, []);
 
-  const signup = useCallback(async (data: SignupFormData) => {
-    // TODO: replace with real API call
-    await new Promise(r => setTimeout(r, 1000));
-    const newUser: User = {
-      id: crypto.randomUUID(),
-      email: data.email,
+  const login = async (email: string, password: string) => {
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (normalizedEmail === 'admin' && password === '123456') {
+      const testUser: AuthUser = {
+        name: 'Admin',
+        email: 'admin',
+        accountType: 'company',
+        createdAt: new Date().toISOString(),
+      };
+
+      saveStoredAuth(testUser);
+      setUser(testUser);
+      return;
+    }
+
+    throw new Error('Invalid credentials');
+  };
+
+  const signup = async (data: SignupFormData) => {
+    const newUser: AuthUser = {
       name: data.name,
-      accountType: data.accountType as AccountType,
-      companyName: data.companyName,
+      email: data.email,
+      accountType: data.accountType,
+      companyName: data.companyName?.trim() || undefined,
+      industry: data.industry?.trim() || undefined,
+      gstin: data.gstin?.trim() || undefined,
       createdAt: new Date().toISOString(),
     };
-    localStorage.setItem('regnix_user', JSON.stringify(newUser));
+
+    saveStoredAuth(newUser);
     setUser(newUser);
-  }, []);
+  };
 
-  const logout = useCallback(() => {
-    localStorage.removeItem('regnix_user');
+  const logout = () => {
+    localStorage.removeItem(AUTH_KEY);
     setUser(null);
-  }, []);
+  };
 
-  return (
-    <AuthContext.Provider value={{ user, isAuthenticated: !!user, login, signup, logout }}>
-      {children}
-    </AuthContext.Provider>
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      user,
+      isAuthenticated: !!user,
+      login,
+      signup,
+      logout,
+    }),
+    [user]
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {
   const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used inside AuthProvider');
+  if (!ctx) {
+    throw new Error('useAuth must be used within AuthProvider');
+  }
   return ctx;
 }
