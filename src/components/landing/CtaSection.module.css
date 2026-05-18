@@ -81,6 +81,16 @@
   display:flex; align-items:center; justify-content:space-between; gap:24px;
   box-shadow:0 12px 40px rgba(124,58,237,0.35);
 }
+.bannerLogoWrap {
+  display:flex; align-items:center; flex-shrink:0;
+  background:rgba(255,255,255,0.15); border-radius:12px;
+  padding:8px 14px; border:1.5px solid rgba(255,255,255,0.25);
+}
+.bannerLogo {
+  height:32px; width:auto; object-fit:contain;
+  filter:brightness(0) invert(1);
+}
+
 .bannerText h3 { font-size:22px; font-weight:800; color:#fff; letter-spacing:-0.03em; margin-bottom:6px; }
 .bannerText p { font-size:14px; color:rgba(255,255,255,0.75); }
 .bannerActions { display:flex; gap:12px; flex-shrink:0; }

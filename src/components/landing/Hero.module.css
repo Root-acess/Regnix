@@ -204,6 +204,13 @@
 .taskText { font-size:11px; color:var(--c-text-2); flex:1; }
 .taskBadge { font-size:9.5px; padding:2px 7px; border-radius:var(--r-full); font-weight:600; }
 
+.mockupLogoWrap {
+  display:flex; align-items:center; margin-right:4px; flex-shrink:0;
+}
+.mockupLogo {
+  height:22px; width:auto; object-fit:contain;
+}
+
 @media(max-width:1024px) { .mockupBody { height:320px; } .kpiRow{grid-template-columns:repeat(2,1fr);} }
 @media(max-width:768px) {
   .hero { padding-top:80px; }

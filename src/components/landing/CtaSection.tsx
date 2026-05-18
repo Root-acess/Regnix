@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import styles from './CtaSection.module.css';
+import regnixLogo from '../../assets/regnix.png';
 
 const LOGOS = ['Tata Group','Infosys','HDFC Bank','Wipro','Bajaj Finance','Mahindra','Reliance','Adani Ports'];
 
@@ -63,6 +64,9 @@ export function CtaSection() {
 
           {/* Bottom banner */}
           <div className={styles.banner}>
+            <div className={styles.bannerLogoWrap}>
+              <img src={regnixLogo} alt="Regnix" className={styles.bannerLogo} />
+            </div>
             <div className={styles.bannerText}>
               <h3>Ready to simplify compliance?</h3>
               <p>Join 200+ Indian enterprises already on Regnix. Free during Early Access.</p>

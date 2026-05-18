@@ -3,13 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/Button';
 import styles from './Navbar.module.css';
-
-const LogoSVG = () => (
-  <svg viewBox="0 0 18 18" fill="none">
-    <path d="M3 4.5C3 3.67 3.67 3 4.5 3H9C11.48 3 13.5 5.02 13.5 7.5C13.5 9.98 11.48 12 9 12H7.5V15H5.25V12H4.5C3.67 12 3 11.33 3 10.5V4.5Z" fill="white"/>
-    <path d="M9 12H10.5L13.5 15H11L9 12Z" fill="rgba(255,255,255,0.65)"/>
-  </svg>
-);
+import regnixLogo from '../../assets/regnix.png';
 
 export function Navbar() {
   const { isAuthenticated, user, logout } = useAuth();
@@ -20,12 +14,52 @@ export function Navbar() {
   return (
     <header className={styles.header}>
       <nav className={styles.nav}>
-        <Link to="/" className={styles.logo}>
-          <span className={styles.logoMark}><LogoSVG /></span>
-          <span className={styles.logoName}>Regnix</span>
-          <span className={styles.logoDot}>·</span>
-          <span className={styles.logoSub}>by Lexvon</span>
+        {/* Cleaned up and polished brand container */}
+        <Link 
+          to="/" 
+          className={styles.logo} 
+          style={{ 
+            display: 'inline-flex', 
+            alignItems: 'center', 
+            gap: '10px', 
+            textDecoration: 'none',
+            lineHeight: 1
+          }}
+        >
+          <img 
+            src={regnixLogo} 
+            alt="Regnix Logo" 
+            style={{ 
+              height: '40px', 
+              width: 'auto', 
+              display: 'block',
+              imageRendering: 'auto'
+            }} 
+          />
+          {/* Replaced generic dot with an elegant, crisp vertical divider */}
+          <span 
+            style={{ 
+              color: 'rgba(0, 0, 0, 0.15)', 
+              fontSize: '14px',
+              fontWeight: 300,
+              userSelect: 'none'
+            }}
+          >
+            |
+          </span>
+          <span 
+            style={{ 
+              fontSize: '14px', 
+              color: '#64748b', // Slate-500 for a perfectly balanced corporate hierarchy
+              fontWeight: 500,
+              letterSpacing: '-0.01em',
+              fontFamily: 'system-ui, -apple-system, sans-serif'
+            }}
+          >
+            by Lexvon
+          </span>
         </Link>
+
         <ul className={styles.links}>
           <li><a href="#features" className={styles.link}>Features</a></li>
           <li><a href="#modules" className={styles.link}>Modules</a></li>

@@ -1,4 +1,5 @@
 import styles from './About.module.css';
+import regnixLogo from '../../assets/regnix.png';
 
 export function About() {
   return (
@@ -44,7 +45,9 @@ export function About() {
               "We built Regnix because compliance shouldn't be a guessing game. It should be a system — one that tells you exactly what to do, when, and why."
             </p>
             <div className={styles.quoteAuthor}>
-              <div className={styles.quoteAvatar}>L</div>
+              <div className={styles.quoteAvatar}>
+                <img src={regnixLogo} alt="Regnix" className={styles.quoteAvatarLogo} />
+              </div>
               <div>
                 <span className={styles.quoteAuthorName}>Lexvon Founding Team</span>
                 <span className={styles.quoteAuthorRole}>Lexvon Technologies · India</span>

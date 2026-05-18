@@ -1,764 +1,600 @@
-/**
- * documentGeneratorService.ts
- * ─────────────────────────────────────────────────────────────
- * Backend processing service for the Regnix Document Generator.
- *
- * Workflow:
- *  1. Parse uploaded master .xlsx (155 columns, Regnix format)
- *  2. Map column values to each statutory form's field set
- *  3. Compose each form as a PDF page using pdf-lib
- *  4. Stamp company header image at top + footer image at bottom
- *  5. Return a ZIP blob containing all PDFs
- *
- * Usage (Express route example):
- *
- *   import { generateComplianceDocs } from './documentGeneratorService';
- *
- *   router.post('/api/generate-docs', upload.fields([
- *     { name: 'header', maxCount: 1 },
- *     { name: 'master', maxCount: 1 },
- *     { name: 'footer', maxCount: 1 },
- *   ]), async (req, res) => {
- *     const result = await generateComplianceDocs({
- *       headerFile : req.files['header'][0].buffer,
- *       masterFile : req.files['master'][0].buffer,
- *       footerFile : req.files['footer'][0].buffer,
- *       headerMime : req.files['header'][0].mimetype,
- *       footerMime : req.files['footer'][0].mimetype,
- *     });
- *     res.set('Content-Type', 'application/zip');
- *     res.send(result.zipBuffer);
- *   });
- *
- * Dependencies (add to package.json):
- *   npm install xlsx pdf-lib jszip
- */
-
-import * as XLSX from 'xlsx';
-import { PDFDocument, rgb, StandardFonts, PDFFont, PDFPage } from 'pdf-lib';
+import fsSync from 'node:fs';
+import path from 'node:path';
+import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 
-// ─── Column index map (matches Regnix.xlsx header row, 0-indexed) ─────────────
-
-const COL = {
-  // Workman / employee
-  SL_NO:                0,
-  REG_NO:               1,
-  ESTABLISHMENT_NAME:   2,
-  PRINCIPAL_EMPLOYER:   3,
-  BUSINESS_TYPE:        4,
-  TOTAL_WORKMEN:        5,
-  CONTRACTOR_NAME:      6,
-  NATURE_OF_WORK:       7,
-  MAX_CONTRACT_LABOUR:  8,
-  CONTRACT_DURATION:    9,
-  REMARKS_GEN:          10,
-  CONTRACTOR_ADDRESS:   11,
-  LICENCE_NO:           12,
-  LICENCE_EXPIRY:       13,
-  LICENCE_REVOKED:      14,
-  SECURITY_DD_PREV:     15,
-  SECURITY_AMT_PREV:    16,
-  SECURITY_DD_BALANCE:  17,
-  REG_CERT_NO:          18,
-  PRINCIPAL_EMPLOYER_2: 19,
-  FRESH_CONTRACT:       20,
-  CERT_REG_NO:          21,
-  PRINCIPAL_EMPLOYER_3: 22,
-  CONTRACTOR_ADDR_2:    23,
-  NATURE_WORK_2:        24,
-  ESTABLISHMENT_ADDR:   25,
-  NATURE_WORK_3:        26,
-  CONTRACT_LOCATION:    27,
-  CONTRACT_FROM:        28,
-  CONTRACT_TO:          29,
-  MAX_WORKMEN:          30,
-  EMP_CODE:             31,
-  WORKMAN_SL:           32,
-  WORKMAN_NAME:         33,
-  AGE_SEX:              34,
-  DESIGNATION:          35,
-  HOME_ADDRESS:         36,
-  LOCAL_ADDRESS:        37,
-  DATE_COMMENCE:        38,
-  SIGNATURE:            39,
-  DATE_TERMINATION:     40,
-  REASON_TERMINATION:   41,
-  TERMINATION_REMARKS:  42,
-  SERIAL_REGISTER:      43,
-  EMPLOYMENT_NATURE:    44,
-  WAGE_RATE:            45,
-  TENURE:               46,
-  EMP_CARD_REMARKS:     47,
-  IDENTIFICATION:       48,
-  EMPLOYED_FROM:        49,
-  EMPLOYED_TO:          50,
-  NATURE_WORK_DONE:     51,
-  RATE_OF_WAGE:         52,
-  FORM_XV_REMARK:       53,
-  // Muster Roll (Form XVI) — columns 54–84 are dates 1–31
-  MUSTER_START:         54,
-  MUSTER_END:           84,
-  FORM_XVI_REMARK:      85,
-  // Wages (Form XVII)
-  WORKMAN_NAME_XVII:    86,
-  SERIAL_REGISTER_XVII: 87,
-  DAYS_WORKED:          88,
-  DAILY_RATE:           89,
-  BASIC_WAGES:          90,
-  DA:                   91,
-  HRA:                  136,
-  MEDICAL_ALLOW:        137,
-  PT:                   138,
-  LWF:                  139,
-  LEAVE_ENCASH:         140,
-  NFH:                  141,
-  CONVEYANCE:           142,
-  STATUTORY_BONUS:      143,
-  OVERTIME:             92,
-  OTHER_CASH:           93,
-  WAGES_TOTAL:          94,
-  DEDUCTIONS:           95,
-  NET_PAYMENT:          96,
-  WORKMAN_SIGN:         97,
-  // Form XX – Deductions
-  DAMAGE_PARTICULARS:   98,
-  DAMAGE_DATE:          99,
-  CAUSE_SHOWN:          100,
-  WITNESS:              101,
-  DEDUCTION_AMOUNT:     102,
-  INSTALLMENTS_NO:      103,
-  RECOVERY_FIRST:       104,
-  RECOVERY_LAST:        105,
-  FORM_XX_REMARK:       106,
-  // Form XXI – Fines
-  FINE_WAGE_PERIOD:     107,
-  FINE_AMOUNT:          108,
-  FINE_REALIZED_DATE:   109,
-  FORM_XXI_REMARK:      110,
-  // Form XXII – Advances
-  ADV_WAGE_PERIOD:      111,
-  ADV_DATE_AMOUNT:      112,
-  ADV_PURPOSE:          113,
-  ADV_INSTALLMENTS:     114,
-  ADV_REPAY_DATE:       115,
-  ADV_LAST_INSTALMENT:  116,
-  FORM_XXII_REMARK:     117,
-  // Form XXIII – Overtime
-  OT_DATE:              118,
-  OT_TOTAL:             119,
-  OT_NORMAL_RATE:       120,
-  OT_RATE:              121,
-  OT_EARNINGS:          122,
-  OT_PAID_DATE:         123,
-  FORM_XXIII_REMARK:    124,
-  // Salary components
-  OTHER_ALLOWANCE:      144,
-  ADDITIONAL_COMP:      145,
-  EMPLOYER_PF:          146,
-  EMPLOYEE_PF:          147,
-  EMPLOYER_EPS:         148,
-  EMPLOYER_EDLI:        149,
-  PF_ADMIN:             150,
-  UAN:                  151,
-  ESIC_IP:              152,
-  ESIC_EMPLOYER:        153,
-  ESIC_EMPLOYEE:        154,
-  // Misc
-  BANK_NAME:            125,
-  SALARY_DATE:          126,
-  WORKING_HOURS:        129,
-  TOTAL_DAYS:           133,
-} as const;
-
-// ─── Types ─────────────────────────────────────────────────────────────────────
+export type Binary = ArrayBuffer | Uint8Array | Buffer;
+type MasterRow = Array<string | number | boolean | null | undefined>;
 
 export interface GenerateOptions {
-  headerFile: Buffer;      // raw bytes of header image (PNG/JPG)
-  masterFile: Buffer;      // raw bytes of .xlsx
-  footerFile: Buffer;      // raw bytes of footer image (PNG/JPG)
-  headerMime: string;      // 'image/png' | 'image/jpeg'
-  footerMime: string;
+  masterFile: Binary;
+  templatesDir?: string;
 }
 
 export interface GenerateResult {
-  zipBuffer: Buffer;
-  formNames: string[];
+  zipBuffer: Uint8Array;
+  fileNames: string[];
   rowCount: number;
 }
 
-export interface WorkerRow {
-  [key: string]: string | number | undefined;
+const TEMPLATE_CANDIDATES = {
+  formXX: [
+    'Form_XX_Register_of_Deductions_for_Damage_or_Loss.xlsx',
+    'Form_XX_Register_of_Deductions_for_Dam.xlsx',
+    'Form_XX_Register_of_Deductions_for_Dam_filled.xlsx',
+    'Form_XX_Register_of_Deductions_for_Damage_or_Loss_filled.xlsx',
+    'Form_XX_Register_of_Deductions_for_Dam(1).xlsx',
+  ],
+  formXXI: [
+    'Form_XXI_Register_of_Fines.xlsx',
+    'Form_XXI_Register_of_Fines_filled.xlsx',
+    'Form_XXI_Register_of_Fines(1).xlsx',
+  ],
+  formXXII: [
+    'Form_XXII_Register_of_Advances.xlsx',
+    'Form_XXII_Register_of_Advances_filled.xlsx',
+    'Form_XXII_Register_of_Advances(1).xlsx',
+  ],
+  formXXIII: [
+    'Form_XXIII_Register_of_Overtime.xlsx',
+    'Form_XXIII_Register_of_Overtime_filled.xlsx',
+    'Form_XXIII_Register_of_Overtime(1).xlsx',
+  ],
+  payslip: [
+    'Payslip_India_Global_v1.xlsx',
+    'Payslip_India_Global_v1(1).xlsx',
+    'Payslip_RGX-LX-001.xlsx',
+    'payslip_template.xlsx',
+    'Payslip_Template.xlsx',
+  ],
+} as const;
+
+function toBuffer(data: Binary): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data);
+  return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
 }
 
-// ─── Helper: parse value ───────────────────────────────────────────────────────
+function resolveTemplatesDir(override?: string): string {
+  const candidates = override
+    ? [override]
+    : [
+        path.join(process.cwd(), 'public', 'templates'),
+        path.join(process.cwd(), 'public', 'template'),
+        path.join(process.cwd(), 'templates'),
+        path.join(process.cwd(), 'template'),
+      ];
 
-function val(row: WorkerRow, colIndex: number): string {
-  const v = row[colIndex];
-  if (v === undefined || v === null) return '';
-  return String(v).trim();
+  for (const p of candidates) {
+    if (fsSync.existsSync(p)) return p;
+  }
+
+  return candidates[0];
 }
 
-// ─── Page layout constants ─────────────────────────────────────────────────────
+function firstExisting(baseDir: string, candidates: readonly string[]): string {
+  for (const name of candidates) {
+    const p = path.join(baseDir, name);
+    if (fsSync.existsSync(p)) return p;
+  }
 
-const PAGE_W   = 841.89; // A4 landscape width  (pts)
-const PAGE_H   = 595.28; // A4 landscape height
-const MARGIN   = 36;
-const HEADER_H = 70;     // reserved height for header image
-const FOOTER_H = 50;     // reserved height for footer image
-const BODY_TOP = PAGE_H - MARGIN - HEADER_H;
-const BODY_BOT = MARGIN + FOOTER_H;
-const BODY_H   = BODY_TOP - BODY_BOT;
+  for (const name of candidates) {
+    const stem = path.parse(name).name;
+    const matches = fsSync.existsSync(baseDir)
+      ? fsSync.readdirSync(baseDir).filter((f) => f.startsWith(stem) && f.endsWith('.xlsx'))
+      : [];
+    if (matches.length > 0) return path.join(baseDir, matches[0]);
+  }
 
-// ─── Stamp header & footer onto a PDF page ─────────────────────────────────────
-
-async function stampBranding(
-  page: PDFPage,
-  pdfDoc: PDFDocument,
-  headerBytes: Buffer,
-  footerBytes: Buffer,
-  headerMime: string,
-  footerMime: string,
-) {
-  const embedImage = async (bytes: Buffer, mime: string) =>
-    mime === 'image/png'
-      ? pdfDoc.embedPng(bytes)
-      : pdfDoc.embedJpg(bytes);
-
-  const headerImg = await embedImage(headerBytes, headerMime);
-  const footerImg = await embedImage(footerBytes, footerMime);
-
-  // Header strip — full width at top
-  page.drawImage(headerImg, {
-    x: MARGIN,
-    y: PAGE_H - MARGIN - HEADER_H,
-    width: PAGE_W - MARGIN * 2,
-    height: HEADER_H,
-  });
-
-  // Footer strip — full width at bottom
-  page.drawImage(footerImg, {
-    x: MARGIN,
-    y: MARGIN,
-    width: PAGE_W - MARGIN * 2,
-    height: FOOTER_H,
-  });
+  throw new Error(`Could not find any template in ${baseDir}: ${candidates.join(', ')}`);
 }
 
-// ─── Draw a simple label:value table ──────────────────────────────────────────
 
-function drawTable(
-  page: PDFPage,
-  font: PDFFont,
-  boldFont: PDFFont,
-  title: string,
-  fields: { label: string; value: string }[][],
-  startY: number,
-  colCount = 3,
-) {
-  const lineH   = 18;
-  const cellW   = (PAGE_W - MARGIN * 2) / colCount;
-  let y = startY;
+async function readRowsFromWorkbook(masterFile: Binary): Promise<MasterRow[]> {
+  const wb = new ExcelJS.Workbook();
+  
+  // FIXED: Cast to 'any' to safely handle the global Node Buffer vs ExcelJS internal Buffer mismatch
+  await wb.xlsx.load(toBuffer(masterFile) as any);
 
-  // Form title
-  page.drawText(title, {
-    x: MARGIN,
-    y,
-    size: 11,
-    font: boldFont,
-    color: rgb(0.1, 0.1, 0.3),
+  const sheet = wb.worksheets[0];
+  if (!sheet) throw new Error('Master workbook does not contain a sheet.');
+
+  const rows: MasterRow[] = [];
+  sheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return; // skip header
+    const values = row.values as Array<string | number | boolean | null | undefined>;
+    const rowArr = values.slice(1) as MasterRow; // ExcelJS rows are 1-indexed in values
+    if (rowArr.some((cell) => String(cell ?? '').trim() !== '')) {
+      rows.push(rowArr);
+    }
   });
-  y -= lineH * 1.4;
 
-  // Draw border line under title
-  page.drawLine({
-    start: { x: MARGIN, y },
-    end: { x: PAGE_W - MARGIN, y },
-    thickness: 0.5,
-    color: rgb(0.7, 0.7, 0.8),
-  });
-  y -= lineH * 0.6;
+  return rows;
+}
 
-  for (const row of fields) {
-    if (y < BODY_BOT + lineH) break; // stop before footer
-    let x = MARGIN;
-    for (const cell of row) {
-      if (cell.label) {
-        page.drawText(cell.label + ':', {
-          x,
-          y,
-          size: 7,
-          font,
-          color: rgb(0.5, 0.5, 0.6),
-        });
-        page.drawText(cell.value || '—', {
-          x,
-          y: y - 9,
-          size: 8.5,
-          font: boldFont,
-          color: rgb(0.1, 0.1, 0.2),
-          maxWidth: cellW - 8,
-        });
+function v(row: MasterRow, idx: number): string {
+  const x = row[idx - 1];
+  return x === undefined || x === null ? '' : String(x).trim();
+}
+
+function pick(row: MasterRow, ...idxs: number[]): string {
+  for (const idx of idxs) {
+    const text = v(row, idx);
+    if (text) return text;
+  }
+  return '';
+}
+
+function num(row: MasterRow, ...idxs: number[]): number {
+  for (const idx of idxs) {
+    const raw = row[idx - 1];
+    if (raw === undefined || raw === null || raw === '') continue;
+    const n = Number(String(raw).replace(/[^\d.-]/g, ''));
+    if (!Number.isNaN(n)) return n;
+  }
+  return 0;
+}
+
+function splitName(raw: string): { name: string; father: string } {
+  const clean = (raw || '').trim();
+  if (!clean) return { name: '', father: '' };
+  const parts = clean.split(/\s*\/\s*/).map((s) => s.trim()).filter(Boolean);
+  return { name: parts[0] || clean, father: parts[1] || '' };
+}
+
+function parseDate(text: string): Date | null {
+  const val = (text || '').trim();
+  if (!val) return null;
+
+  const m = val.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
+  if (m) {
+    const d = Number(m[1]);
+    const mo = Number(m[2]) - 1;
+    let y = Number(m[3]);
+    if (y < 100) y += 2000;
+    const dt = new Date(y, mo, d);
+    if (!Number.isNaN(dt.getTime())) return dt;
+  }
+
+  const parsed = new Date(val);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function monthYear(text: string): { label: string; dt: Date | null } {
+  const dt = parseDate(text);
+  if (!dt) return { label: text, dt: null };
+  const label = dt.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+  return { label, dt };
+}
+
+function daysInMonth(dt: Date | null): number {
+  if (!dt) return 30;
+  return new Date(dt.getFullYear(), dt.getMonth() + 1, 0).getDate();
+}
+
+function cloneStyle<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function copyRowStyle(ws: ExcelJS.Worksheet, srcRow: number, dstRow: number, cols?: number): void {
+  const maxCols = cols ?? ws.columnCount;
+  const s = ws.getRow(srcRow);
+  const d = ws.getRow(dstRow);
+
+  d.height = s.height;
+  d.hidden = s.hidden;
+
+  for (let c = 1; c <= maxCols; c++) {
+    const sc = s.getCell(c);
+    const dc = d.getCell(c);
+    dc.style = cloneStyle(sc.style || {});
+  }
+}
+
+function setv(ws: ExcelJS.Worksheet, cellRef: string, value: unknown): void {
+  ws.getCell(cellRef).value = value as never;
+}
+
+async function loadTemplate(templatesDir: string, candidates: readonly string[]): Promise<ExcelJS.Workbook> {
+  const filePath = firstExisting(templatesDir, candidates);
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(filePath);
+  return wb;
+}
+
+function getSheet(workbook: ExcelJS.Workbook): ExcelJS.Worksheet {
+  const sheet = workbook.getWorksheet('Sheet1') || workbook.worksheets[0];
+  if (!sheet) throw new Error('Template workbook does not contain a sheet.');
+  return sheet;
+}
+
+function buildFormXX(workbook: ExcelJS.Workbook, rows: MasterRow[]): ExcelJS.Workbook {
+  const ws = getSheet(workbook);
+  const first = rows[0] ?? [];
+
+  const contractor = pick(first, 7, 12, 23);
+  const licenseNo = pick(first, 13);
+  const principal = pick(first, 4);
+  const establishment = pick(first, 3).split('\n')[0];
+  const principalEst = [principal, establishment].filter(Boolean).join('\n');
+  const location = pick(first, 26, 25, 24);
+
+  setv(ws, 'B4', contractor);
+  setv(ws, 'H4', licenseNo);
+  setv(ws, 'B5', principalEst);
+  setv(ws, 'H5', location);
+
+  const limit = Math.min(rows.length, 25);
+  for (let i = 0; i < limit; i++) {
+    const row = rows[i];
+    const r = 7 + i;
+    if (r !== 7) copyRowStyle(ws, 7, r, ws.columnCount);
+
+    const { name } = splitName(pick(row, 90, 32, 300));
+    const amountDeduction = pick(row, 107, 368) || (num(row, 107) ? String(Math.trunc(num(row, 107))) : '');
+    const amountPerInstall =
+      pick(row, 369) ||
+      (amountDeduction && num(row, 108) ? (num(row, 107) / num(row, 108)).toFixed(2) : '');
+
+    const remarks = [
+      pick(row, 105),
+      pick(row, 106),
+      pick(row, 111),
+      pick(row, 378),
+      pick(row, 299),
+      pick(row, 334),
+    ].filter(Boolean).join(' | ');
+
+    setv(ws, `A${r}`, i + 1);
+    setv(ws, `B${r}`, name);
+    setv(ws, `C${r}`, pick(row, 217, 34, 216));
+    setv(ws, `D${r}`, pick(row, 104, 370));
+    setv(ws, `E${r}`, pick(row, 103, 371));
+    setv(ws, `F${r}`, pick(row, 368, 107, 103));
+    setv(ws, `G${r}`, amountDeduction);
+    setv(ws, `H${r}`, pick(row, 108));
+    setv(ws, `I${r}`, amountPerInstall);
+    setv(ws, `J${r}`, pick(row, 109, 110, 372, 373));
+    setv(ws, `K${r}`, remarks);
+    setv(ws, `L${r}`, pick(row, 101, 38));
+  }
+
+  return workbook;
+}
+
+function buildFormXXI(workbook: ExcelJS.Workbook, rows: MasterRow[]): ExcelJS.Workbook {
+  const ws = getSheet(workbook);
+  const first = rows[0] ?? [];
+
+  const contractor = pick(first, 7, 12, 23);
+  const licenseNo = pick(first, 13);
+  const principal = pick(first, 4);
+  const establishment = pick(first, 3).split('\n')[0];
+  const principalEst = [principal, establishment].filter(Boolean).join('\n');
+  const location = pick(first, 26, 25, 24);
+
+  setv(ws, 'B4', contractor);
+  setv(ws, 'H4', licenseNo);
+  setv(ws, 'B5', principalEst);
+  setv(ws, 'H5', location);
+
+  const limit = Math.min(rows.length, 25);
+  for (let i = 0; i < limit; i++) {
+    const row = rows[i];
+    const r = 7 + i;
+    if (r !== 7) copyRowStyle(ws, 7, r, ws.columnCount);
+
+    const { name } = splitName(pick(row, 90, 32, 300));
+    const remarks = [
+      pick(row, 115),
+      pick(row, 111),
+      pick(row, 299),
+      pick(row, 334),
+    ].filter(Boolean).join(' | ');
+
+    setv(ws, `A${r}`, i + 1);
+    setv(ws, `B${r}`, name);
+    setv(ws, `C${r}`, pick(row, 217, 34, 216));
+    setv(ws, `D${r}`, pick(row, 370, 104));
+    setv(ws, `E${r}`, pick(row, 371, 103));
+    setv(ws, `F${r}`, pick(row, 372, 105));
+    setv(ws, `G${r}`, pick(row, 373, 106));
+    setv(ws, `H${r}`, pick(row, 113, 374));
+    setv(ws, `I${r}`, pick(row, 374, 109));
+    setv(ws, `J${r}`, pick(row, 114, 375));
+    setv(ws, `K${r}`, remarks);
+  }
+
+  return workbook;
+}
+
+function parseComboDateAmount(text: string): { date: string; amount: string } {
+  const val = (text || '').trim();
+  if (!val) return { date: '', amount: '' };
+
+  const dateMatch = val.match(/(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})/);
+  const nums = val.replace(/,/g, '').match(/(?<!\d)(\d+(?:\.\d+)?)/g) || [];
+  let amount = '';
+
+  if (nums.length) {
+    const vals = nums.map(Number).filter((n) => !Number.isNaN(n));
+    if (vals.length) {
+      const mx = Math.max(...vals);
+      amount = Number.isInteger(mx) ? String(mx) : String(mx);
+    }
+  }
+
+  return { date: dateMatch?.[1] || '', amount };
+}
+
+function buildFormXXII(workbook: ExcelJS.Workbook, rows: MasterRow[]): ExcelJS.Workbook {
+  const ws = getSheet(workbook);
+  const first = rows[0] ?? [];
+
+  const contractor = pick(first, 7, 12, 23);
+  const licenseNo = pick(first, 13);
+  const principal = pick(first, 4);
+  const establishment = pick(first, 3).split('\n')[0];
+  const principalEst = [principal, establishment].filter(Boolean).join('\n');
+  const location = pick(first, 26, 25, 24);
+
+  setv(ws, 'B4', contractor);
+  setv(ws, 'I4', licenseNo);
+  setv(ws, 'B5', principalEst);
+  setv(ws, 'I5', location);
+
+  const limit = Math.min(rows.length, 25);
+  for (let i = 0; i < limit; i++) {
+    const row = rows[i];
+    const r = 7 + i;
+    if (r !== 7) copyRowStyle(ws, 7, r, ws.columnCount);
+
+    const { name } = splitName(pick(row, 90, 32, 300));
+    const advCombo = parseComboDateAmount(pick(row, 117));
+    const instCombo = parseComboDateAmount(pick(row, 120));
+    const amountAdv = advCombo.amount || pick(row, 185, 366);
+    const amountInst = instCombo.amount || pick(row, 120);
+
+    let balance = '';
+    if (amountAdv && pick(row, 185, 366)) {
+      const a = Number(String(amountAdv).replace(/[^\d.-]/g, ''));
+      const b = Number(String(pick(row, 185, 366)).replace(/[^\d.-]/g, ''));
+      if (!Number.isNaN(a) && !Number.isNaN(b)) {
+        const n = a - b;
+        balance = Number.isInteger(n) ? String(n) : String(n);
       }
-      x += cellW;
-    }
-    y -= lineH * 1.6;
-  }
-
-  return y; // return remaining Y for chaining
-}
-
-// ─── Generate Form XIII – Register of Workmen ─────────────────────────────────
-
-async function buildFormXIII(
-  rows: WorkerRow[],
-  pdfDoc: PDFDocument,
-  headerBytes: Buffer, footerBytes: Buffer,
-  headerMime: string, footerMime: string,
-  font: PDFFont, bold: PDFFont,
-): Promise<void> {
-  for (const row of rows) {
-    const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
-    await stampBranding(page, pdfDoc, headerBytes, footerBytes, headerMime, footerMime);
-
-    const fields: { label: string; value: string }[][] = [
-      [
-        { label: 'Sl. No',                value: val(row, COL.SL_NO) },
-        { label: 'Workman Name',           value: val(row, COL.WORKMAN_NAME) },
-        { label: 'Age & Sex',              value: val(row, COL.AGE_SEX) },
-      ],
-      [
-        { label: 'Father / Husband Name', value: val(row, COL.WORKMAN_NAME) },
-        { label: 'Designation',           value: val(row, COL.DESIGNATION) },
-        { label: 'Employee Code',         value: val(row, COL.EMP_CODE) },
-      ],
-      [
-        { label: 'Permanent Address',     value: val(row, COL.HOME_ADDRESS) },
-        { label: 'Local Address',         value: val(row, COL.LOCAL_ADDRESS) },
-        { label: 'Identification Marks',  value: val(row, COL.IDENTIFICATION) },
-      ],
-      [
-        { label: 'Date of Commencement',  value: val(row, COL.DATE_COMMENCE) },
-        { label: 'Date of Termination',   value: val(row, COL.DATE_TERMINATION) },
-        { label: 'Reason for Termination',value: val(row, COL.REASON_TERMINATION) },
-      ],
-      [
-        { label: 'Contractor',            value: val(row, COL.CONTRACTOR_NAME) },
-        { label: 'Establishment',         value: val(row, COL.ESTABLISHMENT_NAME) },
-        { label: 'Principal Employer',    value: val(row, COL.PRINCIPAL_EMPLOYER) },
-      ],
-      [
-        { label: 'Nature of Work',        value: val(row, COL.NATURE_OF_WORK) },
-        { label: 'Wage Rate',             value: val(row, COL.WAGE_RATE) },
-        { label: 'Remarks',              value: val(row, COL.TERMINATION_REMARKS) },
-      ],
-    ];
-
-    drawTable(page, font, bold, 'FORM XIII — Register of Workmen Employed by Contractor [Rule 75]', fields, BODY_TOP - 10);
-  }
-}
-
-// ─── Generate Form XIV – Employment Card ──────────────────────────────────────
-
-async function buildFormXIV(
-  rows: WorkerRow[],
-  pdfDoc: PDFDocument,
-  headerBytes: Buffer, footerBytes: Buffer,
-  headerMime: string, footerMime: string,
-  font: PDFFont, bold: PDFFont,
-): Promise<void> {
-  for (const row of rows) {
-    const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
-    await stampBranding(page, pdfDoc, headerBytes, footerBytes, headerMime, footerMime);
-
-    const fields: { label: string; value: string }[][] = [
-      [
-        { label: 'Name of Workman',       value: val(row, COL.WORKMAN_NAME) },
-        { label: 'Sl. No in Register',    value: val(row, COL.SERIAL_REGISTER) },
-        { label: 'Nature of Employment',  value: val(row, COL.EMPLOYMENT_NATURE) },
-      ],
-      [
-        { label: 'Wage Rate / Unit',      value: val(row, COL.WAGE_RATE) },
-        { label: 'Tenure of Employment',  value: val(row, COL.TENURE) },
-        { label: 'Remarks',              value: val(row, COL.EMP_CARD_REMARKS) },
-      ],
-    ];
-
-    drawTable(page, font, bold, 'FORM XIV — Employment Card [Rule 76]', fields, BODY_TOP - 10);
-  }
-}
-
-// ─── Generate Form XV – Service Certificate ───────────────────────────────────
-
-async function buildFormXV(
-  rows: WorkerRow[],
-  pdfDoc: PDFDocument,
-  headerBytes: Buffer, footerBytes: Buffer,
-  headerMime: string, footerMime: string,
-  font: PDFFont, bold: PDFFont,
-): Promise<void> {
-  for (const row of rows) {
-    const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
-    await stampBranding(page, pdfDoc, headerBytes, footerBytes, headerMime, footerMime);
-
-    const fields: { label: string; value: string }[][] = [
-      [
-        { label: 'Name of Workman',        value: val(row, COL.WORKMAN_NAME) },
-        { label: 'Total Period From',      value: val(row, COL.EMPLOYED_FROM) },
-        { label: 'Total Period To',        value: val(row, COL.EMPLOYED_TO) },
-      ],
-      [
-        { label: 'Nature of Work Done',    value: val(row, COL.NATURE_WORK_DONE) },
-        { label: 'Rate of Wage',          value: val(row, COL.RATE_OF_WAGE) },
-        { label: 'Remarks',              value: val(row, COL.FORM_XV_REMARK) },
-      ],
-    ];
-
-    drawTable(page, font, bold, 'FORM XV — Service Certificate [Rule 77]', fields, BODY_TOP - 10);
-  }
-}
-
-// ─── Generate Form XVI – Muster Roll ──────────────────────────────────────────
-
-async function buildFormXVI(
-  rows: WorkerRow[],
-  pdfDoc: PDFDocument,
-  headerBytes: Buffer, footerBytes: Buffer,
-  headerMime: string, footerMime: string,
-  font: PDFFont, bold: PDFFont,
-): Promise<void> {
-  for (const row of rows) {
-    const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
-    await stampBranding(page, pdfDoc, headerBytes, footerBytes, headerMime, footerMime);
-
-    // Build daily attendance row
-    const dayFields: { label: string; value: string }[] = [];
-    for (let d = 1; d <= 31; d++) {
-      dayFields.push({ label: `Day ${d}`, value: val(row, COL.MUSTER_START + d - 1) });
     }
 
-    // chunk into rows of 8
-    const chunked: { label: string; value: string }[][] = [];
-    for (let i = 0; i < dayFields.length; i += 8) {
-      chunked.push(dayFields.slice(i, i + 8));
-    }
-
-    const headerFields: { label: string; value: string }[][] = [
-      [
-        { label: 'Name of Workman',  value: val(row, COL.WORKMAN_NAME) },
-        { label: 'Serial No',        value: val(row, COL.WORKMAN_SL) },
-        { label: 'Remarks',         value: val(row, COL.FORM_XVI_REMARK) },
-      ],
-      ...chunked,
-    ];
-
-    drawTable(page, font, bold, 'FORM XVI — Muster Roll [Rule 78(1)(a)(i)]', headerFields, BODY_TOP - 10, 8);
-  }
-}
-
-// ─── Generate Form XVII – Register of Wages ───────────────────────────────────
-
-async function buildFormXVII(
-  rows: WorkerRow[],
-  pdfDoc: PDFDocument,
-  headerBytes: Buffer, footerBytes: Buffer,
-  headerMime: string, footerMime: string,
-  font: PDFFont, bold: PDFFont,
-): Promise<void> {
-  for (const row of rows) {
-    const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
-    await stampBranding(page, pdfDoc, headerBytes, footerBytes, headerMime, footerMime);
-
-    const fields: { label: string; value: string }[][] = [
-      [
-        { label: 'Name of Workman',      value: val(row, COL.WORKMAN_NAME_XVII) },
-        { label: 'Serial No. (Register)',value: val(row, COL.SERIAL_REGISTER_XVII) },
-        { label: 'Days Worked',          value: val(row, COL.DAYS_WORKED) },
-      ],
-      [
-        { label: 'Daily Rate / Piece Rate', value: val(row, COL.DAILY_RATE) },
-        { label: 'Basic Wages',          value: val(row, COL.BASIC_WAGES) },
-        { label: 'D.A.',                 value: val(row, COL.DA) },
-      ],
-      [
-        { label: 'H.R.A.',               value: val(row, COL.HRA) },
-        { label: 'Medical Allowance',    value: val(row, COL.MEDICAL_ALLOW) },
-        { label: 'Conveyance',           value: val(row, COL.CONVEYANCE) },
-      ],
-      [
-        { label: 'Overtime',             value: val(row, COL.OVERTIME) },
-        { label: 'Other Cash Payments',  value: val(row, COL.OTHER_CASH) },
-        { label: 'Statutory Bonus',      value: val(row, COL.STATUTORY_BONUS) },
-      ],
-      [
-        { label: 'Leave Encashment',     value: val(row, COL.LEAVE_ENCASH) },
-        { label: 'NFH Allowance',        value: val(row, COL.NFH) },
-        { label: 'Other Allowance',      value: val(row, COL.OTHER_ALLOWANCE) },
-      ],
-      [
-        { label: 'Gross Total',          value: val(row, COL.WAGES_TOTAL) },
-        { label: 'Deductions',           value: val(row, COL.DEDUCTIONS) },
-        { label: 'Net Payment',          value: val(row, COL.NET_PAYMENT) },
-      ],
-      [
-        { label: 'P.T.',                 value: val(row, COL.PT) },
-        { label: 'L.W.F.',               value: val(row, COL.LWF) },
-        { label: 'Workman Signature',    value: val(row, COL.WORKMAN_SIGN) },
-      ],
-    ];
-
-    drawTable(page, font, bold, 'FORM XVII — Register of Wages [Rule 78(1)(a)(i)]', fields, BODY_TOP - 10);
-  }
-}
-
-// ─── Generate Form XX – Register of Deductions ────────────────────────────────
-
-async function buildFormXX(
-  rows: WorkerRow[],
-  pdfDoc: PDFDocument,
-  headerBytes: Buffer, footerBytes: Buffer,
-  headerMime: string, footerMime: string,
-  font: PDFFont, bold: PDFFont,
-): Promise<void> {
-  for (const row of rows) {
-    const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
-    await stampBranding(page, pdfDoc, headerBytes, footerBytes, headerMime, footerMime);
-
-    const fields: { label: string; value: string }[][] = [
-      [
-        { label: 'Particulars of Damage/Loss', value: val(row, COL.DAMAGE_PARTICULARS) },
-        { label: 'Date of Damage/Loss',        value: val(row, COL.DAMAGE_DATE) },
-        { label: 'Cause Shown?',               value: val(row, COL.CAUSE_SHOWN) },
-      ],
-      [
-        { label: 'Witness Present',     value: val(row, COL.WITNESS) },
-        { label: 'Amount of Deduction', value: val(row, COL.DEDUCTION_AMOUNT) },
-        { label: 'No. of Instalments',  value: val(row, COL.INSTALLMENTS_NO) },
-      ],
-      [
-        { label: 'First Recovery Date', value: val(row, COL.RECOVERY_FIRST) },
-        { label: 'Last Recovery Date',  value: val(row, COL.RECOVERY_LAST) },
-        { label: 'Remarks',            value: val(row, COL.FORM_XX_REMARK) },
-      ],
-    ];
-
-    drawTable(page, font, bold, 'FORM XX — Register of Deductions for Damage or Loss [Rule 78(1)(a)(i)]', fields, BODY_TOP - 10);
-  }
-}
-
-// ─── Generate Form XXI – Register of Fines ────────────────────────────────────
-
-async function buildFormXXI(
-  rows: WorkerRow[],
-  pdfDoc: PDFDocument,
-  headerBytes: Buffer, footerBytes: Buffer,
-  headerMime: string, footerMime: string,
-  font: PDFFont, bold: PDFFont,
-): Promise<void> {
-  for (const row of rows) {
-    const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
-    await stampBranding(page, pdfDoc, headerBytes, footerBytes, headerMime, footerMime);
-
-    const fields: { label: string; value: string }[][] = [
-      [
-        { label: 'Wage Period & Wages Payable', value: val(row, COL.FINE_WAGE_PERIOD) },
-        { label: 'Amount of Fine Imposed',      value: val(row, COL.FINE_AMOUNT) },
-        { label: 'Date Fine Realised',          value: val(row, COL.FINE_REALIZED_DATE) },
-      ],
-      [
-        { label: 'Remarks', value: val(row, COL.FORM_XXI_REMARK) },
-        { label: '', value: '' },
-        { label: '', value: '' },
-      ],
-    ];
-
-    drawTable(page, font, bold, 'FORM XXI — Register of Fines [Rule 78(1)(a)(ii)]', fields, BODY_TOP - 10);
-  }
-}
-
-// ─── Generate Form XXII – Register of Advances ────────────────────────────────
-
-async function buildFormXXII(
-  rows: WorkerRow[],
-  pdfDoc: PDFDocument,
-  headerBytes: Buffer, footerBytes: Buffer,
-  headerMime: string, footerMime: string,
-  font: PDFFont, bold: PDFFont,
-): Promise<void> {
-  for (const row of rows) {
-    const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
-    await stampBranding(page, pdfDoc, headerBytes, footerBytes, headerMime, footerMime);
-
-    const fields: { label: string; value: string }[][] = [
-      [
-        { label: 'Wage Period',         value: val(row, COL.ADV_WAGE_PERIOD) },
-        { label: 'Date & Amount Given', value: val(row, COL.ADV_DATE_AMOUNT) },
-        { label: 'Purpose',            value: val(row, COL.ADV_PURPOSE) },
-      ],
-      [
-        { label: 'No. of Instalments',   value: val(row, COL.ADV_INSTALLMENTS) },
-        { label: 'Repayment Date',       value: val(row, COL.ADV_REPAY_DATE) },
-        { label: 'Last Instalment Date', value: val(row, COL.ADV_LAST_INSTALMENT) },
-      ],
-      [
-        { label: 'Remarks', value: val(row, COL.FORM_XXII_REMARK) },
-        { label: '', value: '' },
-        { label: '', value: '' },
-      ],
-    ];
-
-    drawTable(page, font, bold, 'FORM XXII — Register of Advances [Rule 78(1)(a)(ii)]', fields, BODY_TOP - 10);
-  }
-}
-
-// ─── Generate Form XXIII – Register of Overtime ───────────────────────────────
-
-async function buildFormXXIII(
-  rows: WorkerRow[],
-  pdfDoc: PDFDocument,
-  headerBytes: Buffer, footerBytes: Buffer,
-  headerMime: string, footerMime: string,
-  font: PDFFont, bold: PDFFont,
-): Promise<void> {
-  for (const row of rows) {
-    const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
-    await stampBranding(page, pdfDoc, headerBytes, footerBytes, headerMime, footerMime);
-
-    const fields: { label: string; value: string }[][] = [
-      [
-        { label: 'Date OT Worked',     value: val(row, COL.OT_DATE) },
-        { label: 'Total OT Hours',     value: val(row, COL.OT_TOTAL) },
-        { label: 'Normal Wage Rate',   value: val(row, COL.OT_NORMAL_RATE) },
-      ],
-      [
-        { label: 'OT Wage Rate',       value: val(row, COL.OT_RATE) },
-        { label: 'OT Earnings',        value: val(row, COL.OT_EARNINGS) },
-        { label: 'OT Wages Paid Date', value: val(row, COL.OT_PAID_DATE) },
-      ],
-      [
-        { label: 'Remarks', value: val(row, COL.FORM_XXIII_REMARK) },
-        { label: '', value: '' },
-        { label: '', value: '' },
-      ],
-    ];
-
-    drawTable(page, font, bold, 'FORM XXIII — Register of Overtime [Rule 78(1)(a)(iii)]', fields, BODY_TOP - 10);
-  }
-}
-
-// ─── Generate PF / ESIC Summary ───────────────────────────────────────────────
-
-async function buildPFESICSummary(
-  rows: WorkerRow[],
-  pdfDoc: PDFDocument,
-  headerBytes: Buffer, footerBytes: Buffer,
-  headerMime: string, footerMime: string,
-  font: PDFFont, bold: PDFFont,
-): Promise<void> {
-  const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
-  await stampBranding(page, pdfDoc, headerBytes, footerBytes, headerMime, footerMime);
-
-  const allFields: { label: string; value: string }[][] = [];
-
-  for (const row of rows) {
-    allFields.push([
-      { label: 'Employee',        value: val(row, COL.WORKMAN_NAME) },
-      { label: 'UAN',             value: val(row, COL.UAN) },
-      { label: 'Basic Wages',     value: val(row, COL.BASIC_WAGES) },
-    ]);
-    allFields.push([
-      { label: 'Employer PF',     value: val(row, COL.EMPLOYER_PF) },
-      { label: 'Employee PF',     value: val(row, COL.EMPLOYEE_PF) },
-      { label: 'Employer EPS',    value: val(row, COL.EMPLOYER_EPS) },
-    ]);
-    allFields.push([
-      { label: 'EDLI',            value: val(row, COL.EMPLOYER_EDLI) },
-      { label: 'PF Admin Charges',value: val(row, COL.PF_ADMIN) },
-      { label: 'ESIC IP No.',     value: val(row, COL.ESIC_IP) },
-    ]);
-    allFields.push([
-      { label: 'ESIC Employer',   value: val(row, COL.ESIC_EMPLOYER) },
-      { label: 'ESIC Employee',   value: val(row, COL.ESIC_EMPLOYEE) },
-      { label: 'Bank Name',       value: val(row, COL.BANK_NAME) },
-    ]);
-    // spacer row
-    allFields.push([
-      { label: '', value: '' }, { label: '', value: '' }, { label: '', value: '' },
-    ]);
+    setv(ws, `A${r}`, i + 1);
+    setv(ws, `B${r}`, name);
+    setv(ws, `C${r}`, pick(row, 217, 34, 216));
+    setv(ws, `D${r}`, advCombo.date);
+    setv(ws, `E${r}`, pick(row, 118, 117));
+    setv(ws, `F${r}`, amountAdv);
+    setv(ws, `G${r}`, pick(row, 119));
+    setv(ws, `H${r}`, amountInst);
+    setv(ws, `I${r}`, instCombo.date || pick(row, 121));
+    setv(ws, `J${r}`, pick(row, 185, 366));
+    setv(ws, `K${r}`, balance || pick(row, 366));
+    setv(ws, `L${r}`, pick(row, 101, 38));
+    setv(ws, `M${r}`, pick(row, 122, 299, 334));
   }
 
-  drawTable(page, font, bold, 'PF / ESIC Summary Register', allFields, BODY_TOP - 10);
+  return workbook;
 }
 
-// ─── Master export function ────────────────────────────────────────────────────
+function buildFormXXIII(workbook: ExcelJS.Workbook, rows: MasterRow[]): ExcelJS.Workbook {
+  const ws = getSheet(workbook);
+  const first = rows[0] ?? [];
 
-export async function generateComplianceDocs(opts: GenerateOptions): Promise<GenerateResult> {
-  const { headerFile, masterFile, footerFile, headerMime, footerMime } = opts;
+  const contractor = pick(first, 7, 12, 23);
+  const licenseNo = pick(first, 13);
+  const principal = pick(first, 4);
+  const establishment = pick(first, 3).split('\n')[0];
+  const principalEst = [principal, establishment].filter(Boolean).join('\n');
+  const location = pick(first, 26, 25, 24);
+  const monthInfo = monthYear(pick(first, 123, 153, 166, 168, 128));
 
-  // 1 ─ Parse Excel
-  const workbook = XLSX.read(masterFile, { type: 'buffer', cellDates: true });
-  const sheet    = workbook.Sheets[workbook.SheetNames[0]];
-  const raw      = XLSX.utils.sheet_to_json<WorkerRow>(sheet, { header: 1, defval: '' });
+  setv(ws, 'B4', contractor);
+  setv(ws, 'I4', licenseNo);
+  setv(ws, 'B5', principalEst);
+  setv(ws, 'I5', location);
+  setv(ws, 'B6', monthInfo.label);
+  setv(ws, 'E6', monthInfo.dt ? monthInfo.dt.getFullYear() : '');
+  setv(ws, 'I6', pick(first, 379, 8, 24));
 
-  // Row 0 is the column header, data starts at row 1
-  const dataRows = (raw as WorkerRow[]).slice(1).filter(r => r[COL.WORKMAN_NAME]);
-  const rowCount = dataRows.length;
+  const limit = Math.min(rows.length, 30);
+  for (let i = 0; i < limit; i++) {
+    const row = rows[i];
+    const r = 8 + i;
+    if (r !== 8) copyRowStyle(ws, 8, r, ws.columnCount);
 
-  const zip  = new JSZip();
-  const formNames: string[] = [];
+    const { name } = splitName(pick(row, 90, 32, 300));
 
-  // Helper to create a new PDF and load fonts
-  const newPDF = async () => {
-    const doc  = await PDFDocument.create();
-    const font = await doc.embedFont(StandardFonts.Helvetica);
-    const bold = await doc.embedFont(StandardFonts.HelveticaBold);
-    return { doc, font, bold };
+    setv(ws, `A${r}`, i + 1);
+    setv(ws, `B${r}`, name);
+    setv(ws, `C${r}`, pick(row, 217, 34, 216));
+    setv(ws, `D${r}`, pick(row, 123, 153));
+    setv(ws, `E${r}`, pick(row, 154));
+    setv(ws, `F${r}`, pick(row, 377));
+    setv(ws, `G${r}`, pick(row, 124));
+    setv(ws, `H${r}`, pick(row, 125));
+    setv(ws, `I${r}`, pick(row, 126));
+    setv(ws, `J${r}`, pick(row, 127));
+    setv(ws, `K${r}`, pick(row, 128));
+    setv(ws, `L${r}`, pick(row, 101, 38));
+    setv(ws, `M${r}`, pick(row, 129, 299, 334));
+  }
+
+  return workbook;
+}
+
+function buildPayslip(workbook: ExcelJS.Workbook, row: MasterRow, idx: number): ExcelJS.Workbook {
+  const ws = workbook.getWorksheet('Payslip') || workbook.worksheets[0];
+  if (!ws) throw new Error('Payslip template workbook does not contain a sheet.');
+
+  const estabFull = pick(row, 3);
+  const estabName = estabFull ? estabFull.split('\n')[0] : pick(row, 4).split('\n')[0];
+  const estabAddr = estabFull && estabFull.includes('\n') ? estabFull.split('\n').slice(1).join('\n') : pick(row, 3);
+  const regNo = pick(row, 2);
+  const licNo = pick(row, 13);
+  const contact = [pick(row, 241), pick(row, 238)].filter(Boolean).join(' | ');
+
+  setv(ws, 'B3', estabName);
+  setv(ws, 'B5', estabAddr);
+  setv(ws, 'B6', `Registration No: ${regNo}  |  License No: ${licNo}`);
+  setv(ws, 'F6', contact);
+
+  const epfReg = pick(row, 146);
+  const esicReg = pick(row, 306, 210, 149);
+  const ptReg = pick(row, 308, 169, 167);
+  const lwfReg = pick(row, 279);
+  setv(ws, 'B7', `EPF Reg: ${epfReg}  |  ESIC Reg: ${esicReg}  |  PT: ${ptReg}  |  LWF Reg: ${lwfReg}`);
+
+  const salaryDate = pick(row, 153, 166, 168, 128);
+  const monthInfo = monthYear(salaryDate);
+  if (monthInfo.dt) {
+    const start = `01-${String(monthInfo.dt.getMonth() + 1).padStart(2, '0')}-${monthInfo.dt.getFullYear()}`;
+    const endDay = daysInMonth(monthInfo.dt);
+    const end = `${String(endDay).padStart(2, '0')}-${String(monthInfo.dt.getMonth() + 1).padStart(2, '0')}-${monthInfo.dt.getFullYear()}`;
+    setv(ws, 'E9', `${monthInfo.label}  (${start} to ${end})`);
+  } else {
+    setv(ws, 'E9', monthInfo.label);
+  }
+  setv(ws, 'G9', salaryDate);
+
+  const fullName = pick(row, 300, 90, 32);
+  const { name: empName } = splitName(fullName);
+  const empCode = pick(row, 294, 30, 31, 42) || `EMP_${idx + 1}`;
+
+  setv(ws, 'C12', empName);
+  setv(ws, 'G12', empCode);
+  setv(ws, 'C13', pick(row, 217, 34, 216));
+  setv(ws, 'G13', pick(row, 216));
+  setv(ws, 'C14', pick(row, 244, 37));
+  setv(ws, 'G14', pick(row, 311, 218));
+  setv(ws, 'C15', pick(row, 305, 158));
+  const aadhaar = pick(row, 304, 157).replace(/\D/g, '');
+  setv(ws, 'G15', aadhaar ? aadhaar.slice(-4).padStart(4, 'X') : '');
+  setv(ws, 'C16', pick(row, 146));
+  setv(ws, 'G16', pick(row, 306, 210, 149));
+  setv(ws, 'C17', pick(row, 152));
+  setv(ws, 'G17', pick(row, 266));
+  setv(ws, 'C18', pick(row, 267));
+  setv(ws, 'G18', pick(row, 265));
+
+  const totalDays = pick(row, 156, 92);
+  setv(ws, 'C19', `${totalDays} of ${monthInfo.dt ? daysInMonth(monthInfo.dt) : 30}`);
+  setv(ws, 'G19', pick(row, 258));
+  setv(ws, 'C20', pick(row, 242));
+  setv(ws, 'G20', pick(row, 230, 311));
+  setv(ws, 'C21', pick(row, 313, 314, 260));
+  setv(ws, 'G21', pick(row, 215, 262));
+  setv(ws, 'C22', 'New Tax Regime (Sec 115BAC)');
+  setv(ws, 'G22', num(row, 141) ? 'No – Contributing to EPF' : 'Yes – Opted out');
+
+  const monthly = {
+    C26: num(row, 94),
+    C27: num(row, 95),
+    C28: num(row, 131),
+    C29: num(row, 137),
+    C30: num(row, 132),
+    C31: num(row, 139, 140),
+    C32: num(row, 135),
+    C33: num(row, 138, 269),
+    C34: num(row, 96),
+
+    G26: num(row, 141),
+    G27: num(row, 151),
+    G28: num(row, 133),
+    G29: num(row, 163),
+    G30: num(row, 332, 331),
+    G31: num(row, 185, 366),
+    G32: 0,
+    G33: 0,
+    G34: 0,
+  } as const;
+
+  for (const [ref, value] of Object.entries(monthly)) {
+    setv(ws, ref, value);
+  }
+
+  const earnKeys = ['C26', 'C27', 'C28', 'C29', 'C30', 'C31', 'C32', 'C33', 'C34'] as const;
+  const deduKeys = ['G26', 'G27', 'G28', 'G29', 'G30', 'G31', 'G32', 'G33', 'G34'] as const;
+  const gross = earnKeys.reduce((sum, k) => sum + monthly[k], 0);
+  const deduct = deduKeys.reduce((sum, k) => sum + monthly[k], 0);
+  const net = gross - deduct;
+
+  setv(ws, 'C36', gross);
+  setv(ws, 'D36', gross * 12);
+  setv(ws, 'G36', deduct);
+  setv(ws, 'H36', deduct * 12);
+  setv(ws, 'F37', net);
+  setv(ws, 'H37', 'Monthly');
+  setv(ws, 'B38', `Amount in Words:  Rupees ${net.toLocaleString('en-IN')} Only  (Rs. ${net.toLocaleString('en-IN')})`);
+
+  setv(ws, 'C42', num(row, 141));
+  setv(ws, 'C43', num(row, 143));
+  setv(ws, 'C44', num(row, 144));
+  setv(ws, 'C45', num(row, 145));
+  setv(ws, 'C46', num(row, 150));
+  setv(ws, 'C47', num(row, 162));
+  setv(ws, 'C48', num(row, 141) + num(row, 143) + num(row, 144) + num(row, 145) + num(row, 150) + num(row, 162));
+
+  setv(ws, 'B83', `Name: ${empName}`);
+  setv(ws, 'C83', `Date: ${salaryDate}`);
+  setv(ws, 'F83', `Name: ${pick(row, 298, 297, 220)}`);
+  setv(ws, 'G83', `Date: ${salaryDate}`);
+
+  return workbook;
+}
+
+export async function generateComplianceDocs(options: GenerateOptions): Promise<GenerateResult> {
+  const templatesDir = resolveTemplatesDir(options.templatesDir);
+  const rows = await readRowsFromWorkbook(options.masterFile);
+
+  const [xxTpl, xxiTpl, xxiiTpl, xxiiiTpl, payslipTpl] = await Promise.all([
+    loadTemplate(templatesDir, TEMPLATE_CANDIDATES.formXX),
+    loadTemplate(templatesDir, TEMPLATE_CANDIDATES.formXXI),
+    loadTemplate(templatesDir, TEMPLATE_CANDIDATES.formXXII),
+    loadTemplate(templatesDir, TEMPLATE_CANDIDATES.formXXIII),
+    loadTemplate(templatesDir, TEMPLATE_CANDIDATES.payslip),
+  ]);
+
+  const zip = new JSZip();
+  const fileNames: string[] = [];
+
+  const outputs: Array<[string, ExcelJS.Workbook]> = [
+    ['Form_XX_Register_of_Deductions_for_Damage_or_Loss_filled.xlsx', buildFormXX(xxTpl, rows)],
+    ['Form_XXI_Register_of_Fines_filled.xlsx', buildFormXXI(xxiTpl, rows)],
+    ['Form_XXII_Register_of_Advances_filled.xlsx', buildFormXXII(xxiiTpl, rows)],
+    ['Form_XXIII_Register_of_Overtime_filled.xlsx', buildFormXXIII(xxiiiTpl, rows)],
+  ];
+
+  for (const [name, wb] of outputs) {
+    const buffer = await wb.xlsx.writeBuffer();
+    zip.file(name, Buffer.from(buffer as ArrayBuffer));
+    fileNames.push(name);
+  }
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const empCode = pick(row, 294, 30, 31, 42).trim() || `ROW_${i + 1}`;
+    const safeCode = empCode.replace(/[^\w.-]+/g, '_');
+    const wb = buildPayslip(payslipTpl, row, i);
+    const buffer = await wb.xlsx.writeBuffer();
+    const name = `Payslip_${safeCode}.xlsx`;
+    zip.file(name, Buffer.from(buffer as ArrayBuffer));
+    fileNames.push(name);
+  }
+
+  zip.file('manifest.json', JSON.stringify({ rowCount: rows.length, fileNames }, null, 2));
+
+  const zipBuffer = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
+
+  return {
+    zipBuffer,
+    fileNames,
+    rowCount: rows.length,
   };
-
-  const addToZip = async (
-    name: string,
-    builder: (d: PDFDocument, f: PDFFont, b: PDFFont) => Promise<void>,
-  ) => {
-    const { doc, font, bold } = await newPDF();
-    await builder(doc, font, bold);
-    const pdfBytes = await doc.save();
-    zip.file(`${name}.pdf`, pdfBytes);
-    formNames.push(name);
-  };
-
-  // 2 ─ Generate each form
-  await addToZip('Form_XIII_Register_of_Workmen', (doc, f, b) =>
-    buildFormXIII(dataRows, doc, headerFile, footerFile, headerMime, footerMime, f, b));
-
-  await addToZip('Form_XIV_Employment_Card', (doc, f, b) =>
-    buildFormXIV(dataRows, doc, headerFile, footerFile, headerMime, footerMime, f, b));
-
-  await addToZip('Form_XV_Service_Certificate', (doc, f, b) =>
-    buildFormXV(dataRows, doc, headerFile, footerFile, headerMime, footerMime, f, b));
-
-  await addToZip('Form_XVI_Muster_Roll', (doc, f, b) =>
-    buildFormXVI(dataRows, doc, headerFile, footerFile, headerMime, footerMime, f, b));
-
-  await addToZip('Form_XVII_Register_of_Wages', (doc, f, b) =>
-    buildFormXVII(dataRows, doc, headerFile, footerFile, headerMime, footerMime, f, b));
-
-  await addToZip('Form_XX_Register_of_Deductions', (doc, f, b) =>
-    buildFormXX(dataRows, doc, headerFile, footerFile, headerMime, footerMime, f, b));
-
-  await addToZip('Form_XXI_Register_of_Fines', (doc, f, b) =>
-    buildFormXXI(dataRows, doc, headerFile, footerFile, headerMime, footerMime, f, b));
-
-  await addToZip('Form_XXII_Register_of_Advances', (doc, f, b) =>
-    buildFormXXII(dataRows, doc, headerFile, footerFile, headerMime, footerMime, f, b));
-
-  await addToZip('Form_XXIII_Register_of_Overtime', (doc, f, b) =>
-    buildFormXXIII(dataRows, doc, headerFile, footerFile, headerMime, footerMime, f, b));
-
-  await addToZip('PF_ESIC_Summary', (doc, f, b) =>
-    buildPFESICSummary(dataRows, doc, headerFile, footerFile, headerMime, footerMime, f, b));
-
-  // 3 ─ Package ZIP
-  const zipBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-
-  return { zipBuffer, formNames, rowCount };
 }

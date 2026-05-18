@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import styles from './Hero.module.css';
+import regnixLogo from '../../assets/regnix.png';
 
 const BAR_H = [35,52,44,68,58,80,72,88,76,92,84,96];
 const BAR_C = ['#7C3AED','#A78BFA','#7C3AED','#A78BFA','#7C3AED','#A78BFA','#7C3AED','#A78BFA','#7C3AED','#7C3AED','#A78BFA','#7C3AED'];
@@ -94,6 +95,9 @@ export function Hero() {
           <div className={styles.mockupShell}>
             <div className={styles.mockupBar}>
               <span className={styles.dot}/><span className={styles.dot}/><span className={styles.dot}/>
+              <div className={styles.mockupLogoWrap}>
+                <img src={regnixLogo} alt="Regnix" className={styles.mockupLogo} />
+              </div>
               <div className={styles.urlBar}>
                 <span className={styles.urlLock}>🔒</span>
                 app.regnix.in/dashboard
