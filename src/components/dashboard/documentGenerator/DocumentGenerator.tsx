@@ -118,7 +118,6 @@ export default function DocumentGenerator() {
       }
 
       const blob = await res.blob();
-      const fileCount = parseInt(res.headers.get('X-File-Count') || '0', 10);
       const rowCount  = parseInt(res.headers.get('X-Row-Count')  || '0', 10);
       const rawNames  = res.headers.get('X-File-Names');
       let names: string[] = [];

@@ -37,7 +37,6 @@ router.post('/generate-docs', uploadFields, async (req: Request, res: Response, 
 
     const result = await generateComplianceDocs({
       masterFile: masterFile.buffer,
-      templatesBaseUrl: '/templates',
     });
 
     const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
