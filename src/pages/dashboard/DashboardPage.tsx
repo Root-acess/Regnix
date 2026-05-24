@@ -1,119 +1,17 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { DashboardSidebar } from './DashboardSidebar';
 import { DashboardHeader } from './DashboardHeader';
 import ComplianceCalendar from '../../components/dashboard/comlianceCalender/ComplianceCalendar';
 import DocumentGenerator from '../../components/dashboard/documentGenerator/DocumentGenerator';
+import DashboardHome from './DashboardHome';
 import styles from './DashboardPage.module.css';
 
-const MODULES = [
-  { icon:'⚖️', title:'Compliance', desc:'Calendar, registers, filing tracker & AI alerts', w:22 },
-  { icon:'🔍', title:'Audit', desc:'Planner, checklists, findings & monitoring', w:15 },
-  { icon:'🧠', title:'Legal AI', desc:'Notice analyzer, reply drafts & case tracker', w:18 },
-  { icon:'💰', title:'Payroll', desc:'PF, ESIC, PT calculations & payslip generator', w:12 },
-  { icon:'👥', title:'Workforce', desc:'Employee lifecycle & vendor management', w:10 },
-  { icon:'📂', title:'Documents', desc:'Central hub with version control & templates', w:8 },
-  { icon:'📊', title:'Reports', desc:'Predictive analytics & exportable reports', w:6 },
-  { icon:'✅', title:'Tasks', desc:'Workflow, SLA tracking & escalation matrix', w:5 },
-];
-
-function DashboardHome() {
-  const { user } = useAuth();
-  const h = new Date().getHours();
-  const greeting = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
-
-  return (
-    <>
-      <div className={styles.welcome}>
-        <div className={styles.welcomeInner}>
-          <span className={styles.welcomeEmoji}>👋</span>
-          <div>
-            <h1 className={styles.welcomeTitle}>{greeting}, {user?.name?.split(' ')[0]}</h1>
-            <p className={styles.welcomeSub}>Your Regnix workspace is active. Modules are being rolled out progressively.</p>
-          </div>
-        </div>
-        <div className={styles.earlyPill}>
-          <span className={styles.earlyDot} />
-          Early Access
-        </div>
-      </div>
-
-      <div className={styles.banner}>
-        <div className={styles.bannerIcon}>🚀</div>
-        <div className={styles.bannerText}>
-          <strong>Platform modules are in active development</strong>
-          <p>All 12 Regnix modules are being built and will activate progressively. You'll receive an email as each module goes live.</p>
-        </div>
-        <div className={styles.progress}>
-          <div className={styles.progressLabel}>Build Progress</div>
-          <div className={styles.progressTrack}><div className={styles.progressFill} style={{width:'18%'}} /></div>
-          <div className={styles.progressPct}>18% complete</div>
-        </div>
-      </div>
-
-      <div className={styles.sectionRow}>
-        <span className={styles.sectionTitle}>Modules</span>
-        <span className={styles.sectionPill}>Coming Soon</span>
-      </div>
-
-      <div className={styles.moduleGrid}>
-        {MODULES.map(m => (
-          <div className={styles.moduleCard} key={m.title}>
-            <div className={styles.moduleCardTop}>
-              <span className={styles.moduleIcon}>{m.icon}</span>
-              <span className={styles.moduleStatus}>Soon</span>
-            </div>
-            <div className={styles.moduleTitle}>{m.title}</div>
-            <div className={styles.moduleDesc}>{m.desc}</div>
-            <div className={styles.moduleBar}><div className={styles.moduleBarFill} style={{width:`${m.w}%`}} /></div>
-          </div>
-        ))}
-      </div>
-
-      <div className={styles.accountCard}>
-        <div className={styles.accountTitle}>Account Details</div>
-        <div className={styles.accountGrid}>
-          <div className={styles.accountField}>
-            <span className={styles.fieldKey}>Name</span>
-            <span className={styles.fieldVal}>{user?.name}</span>
-          </div>
-          <div className={styles.accountField}>
-            <span className={styles.fieldKey}>Email</span>
-            <span className={styles.fieldVal}>{user?.email}</span>
-          </div>
-          <div className={styles.accountField}>
-            <span className={styles.fieldKey}>Account Type</span>
-            <span className={styles.fieldVal} style={{textTransform:'capitalize'}}>{user?.accountType}</span>
-          </div>
-          {user?.companyName && (
-            <div className={styles.accountField}>
-              <span className={styles.fieldKey}>Company</span>
-              <span className={styles.fieldVal}>{user.companyName}</span>
-            </div>
-          )}
-          <div className={styles.accountField}>
-            <span className={styles.fieldKey}>Member Since</span>
-            <span className={styles.fieldVal}>{new Date(user?.createdAt ?? '').toLocaleDateString('en-IN',{day:'numeric',month:'long',year:'numeric'})}</span>
-          </div>
-          <div className={styles.accountField}>
-            <span className={styles.fieldKey}>Plan</span>
-            <span className={styles.fieldVal}><span className={styles.planPill}>Early Access — Free</span></span>
-          </div>
-        </div>
-      </div>
-    </>
-  );
-}
-
-// Map view IDs to their rendered components
 function renderView(view: string) {
   switch (view) {
     case 'calendar':   return <ComplianceCalendar />;
     case 'generator':  return <DocumentGenerator />;
-    // case 'checker':    return <ApplicabilityChecker />;
-    // case 'register':   return <StatutoryRegister />;
-    // case 'filing':     return <FilingTracker />;
     default:           return <DashboardHome />;
   }
 }
@@ -121,10 +19,25 @@ function renderView(view: string) {
 export default function DashboardPage() {
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
+  const params = useParams<{ section?: string; sub?: string }>();
   const [collapsed, setCollapsed] = useState(false);
-  const [activeView, setActiveView] = useState('generator');
+  const [aiOpen, setAiOpen] = useState(true);
 
-  useEffect(() => { if (!isAuthenticated) navigate('/login'); }, [isAuthenticated, navigate]);
+  // Derive active view from URL params
+  const activeView = params.sub || params.section || 'dashboard';
+
+  const handleNavigate = (id: string) => {
+    if (id === 'dashboard') {
+      navigate('/dashboard');
+    } else {
+      navigate(`/dashboard/${id}`);
+    }
+  };
+
+  useEffect(() => {
+    if (!isAuthenticated) navigate('/login');
+  }, [isAuthenticated, navigate]);
+
   if (!isAuthenticated) return null;
 
   return (
@@ -133,14 +46,61 @@ export default function DashboardPage() {
         collapsed={collapsed}
         onToggle={() => setCollapsed(v => !v)}
         activeView={activeView}
-        onNavigate={setActiveView}
+        onNavigate={handleNavigate}
       />
       <div className={styles.main}>
-        <DashboardHeader />
-        <div className={styles.content}>
-          {renderView(activeView)}
+        <DashboardHeader onAiToggle={() => setAiOpen(v => !v)} aiOpen={aiOpen} />
+        <div className={styles.contentRow}>
+          <div className={styles.content}>
+            {renderView(activeView)}
+          </div>
+          {aiOpen && <AiAssistantPanel onClose={() => setAiOpen(false)} />}
         </div>
       </div>
     </div>
+  );
+}
+
+function AiAssistantPanel({ onClose }: { onClose: () => void }) {
+  const [input, setInput] = useState('');
+  const suggestions = [
+    'Explain in a nov suggestions',
+    'AI Compliant suggestions',
+  ];
+
+  return (
+    <aside className={styles.aiPanel}>
+      <div className={styles.aiHeader}>
+        <span className={styles.aiTitle}>AI Assistant</span>
+        <button className={styles.aiClose} onClick={onClose}>✕</button>
+      </div>
+      <div className={styles.aiMessages}>
+        <div className={styles.aiMsg}>
+          <div className={styles.aiMsgAvatar}>
+            <svg width="14" height="14" viewBox="0 0 15 15" fill="none"><path d="M2 3.5C2 2.95 2.45 2.5 3 2.5H7.5C9.43 2.5 11 4.07 11 6C11 7.93 9.43 9.5 7.5 9.5H6.25V12H4.5V9.5H3C2.45 9.5 2 9.05 2 8.5V3.5Z" fill="white"/><path d="M7.5 9.5H8.75L11 12H9.25L7.5 9.5Z" fill="rgba(255,255,255,0.55)"/></svg>
+          </div>
+          <div className={styles.aiMsgBubble}>
+            Hi! I'm your Regnix AI compliance assistant. How can I help you today with compliance, audits, or filing?
+          </div>
+        </div>
+      </div>
+      <div className={styles.aiSuggestions}>
+        {suggestions.map(s => (
+          <button key={s} className={styles.aiSugg} onClick={() => setInput(s)}>{s}</button>
+        ))}
+      </div>
+      <div className={styles.aiInputRow}>
+        <input
+          className={styles.aiInput}
+          placeholder="Type your suggestion..."
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') setInput(''); }}
+        />
+        <button className={styles.aiSend} onClick={() => setInput('')}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </div>
+    </aside>
   );
 }

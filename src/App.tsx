@@ -13,7 +13,10 @@ export default function App() {
           <Route path="/" element={<LandingPage />} />
           <Route path="/signup" element={<SignupPage />} />
           <Route path="/login" element={<LoginPage />} />
+          {/* Dashboard with nested routes */}
           <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/dashboard/:section" element={<DashboardPage />} />
+          <Route path="/dashboard/:section/:sub" element={<DashboardPage />} />
           {/* Catch-all */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
